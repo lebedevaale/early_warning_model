@@ -244,6 +244,7 @@ def variables_dynamics(data,
 
     # Calculating mean, min and max values of variables for each unique value in groupby column
     data_mean = data.groupby(groupby).mean()
+    data_median = data.groupby(groupby).median()
     if mean_only != True:
         data_min = data.groupby(groupby).min()
         data_max = data.groupby(groupby).max()
@@ -251,6 +252,7 @@ def variables_dynamics(data,
     # Scattering returns
     for i, col in enumerate(av_cols):
         fig.add_trace(go.Scatter(x = data_mean.index, y = data_mean[col], mode = 'lines', name = f'{col}_mean', line = dict(color = 'green')), row = i + 1, col = 1)
+        fig.add_trace(go.Scatter(x = data_mean.index, y = data_median[col], mode = 'lines', name = f'{col}_median', line = dict(color = 'yellow')), row = i + 1, col = 1)
         if mean_only != True:
             fig.add_trace(go.Scatter(x = data_min.index, y = data_min[col], mode = 'lines', name = f'{col}_min', line = dict(color = 'red')), row = i + 1, col = 1)
             fig.add_trace(go.Scatter(x = data_max.index, y = data_max[col], mode = 'lines', name = f'{col}_max', line = dict(color = 'blue')), row = i + 1, col = 1)
