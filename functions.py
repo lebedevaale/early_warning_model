@@ -2,10 +2,14 @@ import operator
 import numpy as np
 import scipy as sp
 import pandas as pd
+from tqdm import tqdm
 import statsmodels.api as sm
 import sklearn.metrics as metrics
 import plotly.graph_objects as go
+import sklearn.model_selection as modsel
 from plotly.subplots import make_subplots
+
+#---------------------------------------------------------------------------------------
 
 def roc_metric(Y, 
                Y_pred):
@@ -26,7 +30,7 @@ def roc_metric(Y,
     thresholds[optimal_index] : float
         Optimal threshold with highest (TPR - FPR)
     """
-
+    
     fpr, tpr, thresholds = metrics.roc_curve(Y, Y_pred, pos_label=1)
     auc = round(metrics.auc(fpr, tpr), 3)
     optimal_index = np.argmax(tpr - fpr)
@@ -72,15 +76,16 @@ def model_optimization(Y_train,
                        X_test,
                        type:str = 'Probit', 
                        p_value_bord:float = 0.05, 
-                       silent:bool = False):
+                       silent:bool = False,
+                       insignificant_feature:bool = True):
     """
     Function for the optimization of OLS
 
     Inputs:
     ----------
-    Y : array
+    Y_train, Y_test : array
         Target variable for the regression
-    X : DataFrame
+    X_train, X_test : DataFrame
         Set of X for the model
     type : str = 'Probit'
         Type of the model
@@ -88,6 +93,8 @@ def model_optimization(Y_train,
         Maximum acceptable p-value for the coefficient
     silent : bool = False
         Whether not to show reports about model
+    insignificant_feature : bool = True
+        Whether to drop insignificant features or to keep them
 
     Returns:
     ----------
@@ -115,7 +122,14 @@ def model_optimization(Y_train,
         Recall score on the test data
     """
     
-    insignificant_feature = True
+    if insignificant_feature == False:
+        # Create model
+        if type == 'Probit':
+            model = sm.Probit(Y_train, X_train)
+        else:
+            model = sm.Logit(Y_train, X_train)
+        results = model.fit(disp = 0)
+
     while insignificant_feature:
         # Create model
         if type == 'Probit':
@@ -269,3 +283,101 @@ def variables_dynamics(data,
 
     # Show the plot
     fig.show()
+
+#---------------------------------------------------------------------------------------
+    
+def model(data,
+          target:str,
+          horizons:list,
+          shares:list,
+          states:list,
+          separate:bool = False):
+    
+    """
+    Function for the Monte Carlo simulation of the samples and modelling
+
+    Inputs:
+    --------------------
+    data : pd.DataFrame
+        Dataframe with data for modelling
+    target : str
+        Name of the target column
+    horizons : list
+        List of possible horizons
+    shares : list
+        List of possible shares of target equal to 1 in the dataset
+    states : list
+        List of random states
+    separate : bool = False
+        Whether to calculate whole models or to separate variables to different models
+
+    Returns:
+    --------------------
+    res : pd.DataFrame
+        Dataframe with raw statistical results of the modelling
+    """
+
+    columns = ['Horizon', '1 Share', '1 Share real', 'State',
+               'Train size', 'Test size', 'Train AUC', 'Test AUC',
+               'Train KS-test p-value', 'Test KS-test p-value',
+               'Train F1-score', 'Test F1-score', 
+               'Train precision', 'Test precision', 
+               'Train recall', 'Test recall', 'Coeffs']
+    if separate == True:
+        columns = columns[:4] + ['Variable'] + columns[4:] + ['Pvalues']
+
+    # Create dataframe for the results
+    res = pd.DataFrame(columns = columns)
+
+    # Iterate over the chosen parameters and optimize classification models, then save all the results to the dataframe
+    for horizon in tqdm(horizons):
+        data_testing = data.copy()
+        data_testing['Flag'] = data_testing['Distance'].apply(lambda x: 0 if x > horizon else 1)
+        data_testing.drop(columns = ['Volume', 'MA100', 'Rise', 'Distance', 'Index', 'Ticker'], inplace = True)
+        
+        data_testing_1 = data_testing[data_testing[target] == 1]
+        data_testing_0 = data_testing[data_testing[target] == 0]
+        Y_1 = data_testing_1[target]
+        if separate == False:
+            X_1 = data_testing_1.drop(columns = [target])
+            share_1_orig = len(data_testing_1) / (len(data_testing_0) + len(data_testing_1))
+            for share in shares:
+                for state in states:
+                    _, X_0, _, Y_0 = modsel.train_test_split(data_testing_0.drop(columns = [target]), data_testing_0[target], 
+                                                             test_size = min(share_1_orig * (1 - share) / share, 1), random_state = state)
+                    share_1 = len(Y_1) / (len(Y_0) + len(Y_1))
+                    Y = pd.concat([Y_0, Y_1])
+                    X = sm.add_constant(pd.concat([X_0, X_1]))
+                    X_train, X_test, Y_train, Y_test = modsel.train_test_split(X, Y, test_size = 0.2, random_state = state)
+                    results_rs, auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs, f1_train_rs,\
+                        f1_test_rs, pr_train_rs, pr_test_rs, rec_train_rs, rec_test_rs\
+                        = model_optimization(Y_train, Y_test, X_train, X_test, silent = True)
+                    res.loc[len(res)] = [horizon, share, share_1, state, len(Y_train), len(Y_test),
+                                        auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs,
+                                        f1_train_rs, f1_test_rs, pr_train_rs, pr_test_rs,
+                                        rec_train_rs, rec_test_rs, results_rs.params]
+        else:
+            for col in data_testing.columns.drop(target):
+                X_1 = data_testing_1[col]
+                share_1_orig = len(data_testing_1) / (len(data_testing_0) + len(data_testing_1))
+                for share in shares:
+                    for state in states:
+                        _, X_0, _, Y_0 = modsel.train_test_split(data_testing_0[col], data_testing_0[target], 
+                                                                 test_size = min(share_1_orig * (1 - share) / share, 1), random_state = state)
+                        share_1 = len(Y_1) / (len(Y_0) + len(Y_1))
+                        Y = pd.concat([Y_0, Y_1])
+                        X = sm.add_constant(pd.concat([X_0, X_1]))
+                        X_train, X_test, Y_train, Y_test = modsel.train_test_split(X, Y, test_size = 0.2, random_state = state)
+                        try:
+                            results_rs, auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs, f1_train_rs,\
+                                f1_test_rs, pr_train_rs, pr_test_rs, rec_train_rs, rec_test_rs\
+                                = model_optimization(Y_train, Y_test, X_train, X_test, silent = True,
+                                                    insignificant_feature = False)
+                            res.loc[len(res)] = [horizon, share, share_1, state, col, len(Y_train), len(Y_test),
+                                                auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs,
+                                                f1_train_rs, f1_test_rs, pr_train_rs, pr_test_rs,
+                                                rec_train_rs, rec_test_rs, results_rs.params, results_rs.pvalues]
+                        except:
+                            pass
+            
+    return res
