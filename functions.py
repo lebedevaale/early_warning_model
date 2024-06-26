@@ -711,3 +711,36 @@ def spread(model:str,
             falls.append(falls_d)
 
     return falls
+
+#---------------------------------------------------------------------------------------
+
+def critical_transition(data:pd.DataFrame,
+                        crit:int,
+                        window:int) -> pd.DataFrame:
+    
+    """
+    Function for the calculation of the critical transition.
+
+    Inputs:
+    ---------
+    data : pd.DataFrame
+        Dataframe with columns for the analysis
+    crit : int
+        The critical value.
+    window : str
+        The window size.
+
+    Returns:
+    ---------
+    data : pd.DataFrame
+    """
+
+    # Calculate the critical transition
+    for col in data.columns:
+        data[f'{col}, MA'] = data[col].rolling(int(window)).mean()
+        data[f'{col}, Var'] = data[col].rolling(int(window)).var()
+        data[f'{col}, Dynamics MA'] = data[f'{col}, MA'] / data[f'{col}, MA'].shift(5)
+        data[f'{col}, Dynamics Var'] = data[f'{col}, Var'] / data[f'{col}, Var'].shift(5)
+        data[f'{col}, Rise'] = (data[f'{col}, Dynamics MA'] > crit) & (data[f'{col}, Dynamics Var'] > crit)
+
+    return data
