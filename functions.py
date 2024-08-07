@@ -339,20 +339,29 @@ def model(data,
         data_testing['Flag'] = data_testing['Distance'].apply(lambda x: 0 if x > horizon else 1)
         data_testing.drop(columns = ['Volume', 'MA100', 'MV100', 'Rise', 'Distance', 'Index', 'Ticker'], inplace = True)
         
+        # Split the data to positive and negative samples
         data_testing_1 = data_testing[data_testing[target] == 1]
         data_testing_0 = data_testing[data_testing[target] == 0]
         Y_1 = data_testing_1[target]
+        
+        # Choose one of the two models
         if separate == False:
             X_1 = data_testing_1.drop(columns = [target])
             share_1_orig = len(data_testing_1) / (len(data_testing_0) + len(data_testing_1))
             for share in shares:
                 for state in states:
+                    
+                    # Drop part of the negative samples to balance sample
                     _, X_0, _, Y_0 = modsel.train_test_split(data_testing_0.drop(columns = [target]), data_testing_0[target], 
                                                              test_size = min(share_1_orig * (1 - share) / share, 1), random_state = state)
                     share_1 = len(Y_1) / (len(Y_0) + len(Y_1))
                     Y = pd.concat([Y_0, Y_1])
                     X = sm.add_constant(pd.concat([X_0, X_1]))
+
+                    # Split the data into train and test
                     X_train, X_test, Y_train, Y_test = modsel.train_test_split(X, Y, test_size = 0.2, random_state = state)
+                    
+                    # Calculate metrics
                     results_rs, auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs, f1_train_rs,\
                         f1_test_rs, pr_train_rs, pr_test_rs, rec_train_rs, rec_test_rs\
                         = model_optimization(Y_train, Y_test, X_train, X_test, silent = True)
@@ -366,12 +375,18 @@ def model(data,
                 share_1_orig = len(data_testing_1) / (len(data_testing_0) + len(data_testing_1))
                 for share in shares:
                     for state in states:
+
+                        # Drop part of the negative samples to balance sample
                         _, X_0, _, Y_0 = modsel.train_test_split(data_testing_0[col], data_testing_0[target], 
                                                                  test_size = min(share_1_orig * (1 - share) / share, 1), random_state = state)
                         share_1 = len(Y_1) / (len(Y_0) + len(Y_1))
                         Y = pd.concat([Y_0, Y_1])
                         X = sm.add_constant(pd.concat([X_0, X_1]))
+                        
+                        # Split the data into train and test
                         X_train, X_test, Y_train, Y_test = modsel.train_test_split(X, Y, test_size = 0.2, random_state = state)
+                        
+                        # Calculate metrics
                         try:
                             results_rs, auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs, f1_train_rs,\
                                 f1_test_rs, pr_train_rs, pr_test_rs, rec_train_rs, rec_test_rs\
