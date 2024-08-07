@@ -337,7 +337,7 @@ def model(data,
     for horizon in tqdm(horizons):
         data_testing = data.copy()
         data_testing['Flag'] = data_testing['Distance'].apply(lambda x: 0 if x > horizon else 1)
-        data_testing.drop(columns = ['Volume', 'MA100', 'Rise', 'Distance', 'Index', 'Ticker'], inplace = True)
+        data_testing.drop(columns = ['Volume', 'MA100', 'MV100', 'Rise', 'Distance', 'Index', 'Ticker'], inplace = True)
         
         data_testing_1 = data_testing[data_testing[target] == 1]
         data_testing_0 = data_testing[data_testing[target] == 0]
