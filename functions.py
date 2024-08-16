@@ -3,18 +3,123 @@ import operator
 import numpy as np
 import scipy as sp
 import pandas as pd
+import xgboost as xgb
 from tqdm import tqdm
 import networkx as nx
+import lightgbm as lgb
 import sklearn.svm as svm
 import statsmodels.api as sm
 import sklearn.ensemble as ens
 import sklearn.metrics as metrics
 import plotly.graph_objects as go
+from catboost import CatBoostClassifier
 import sklearn.model_selection as modsel
 from plotly.subplots import make_subplots
 from sklearn.inspection import permutation_importance as pi
 
 np.random.seed(0)
+
+#---------------------------------------------------------------------------------------
+
+
+def variables_dynamics(data,
+                       groupby:str,
+                       mean_only:bool = False):
+
+    """
+    Function for the plotting of the dynamics for the variables
+
+    Inputs:
+    --------------------
+    data : pd.DataFrame
+        Dataframe with columns for the analysis
+    groupby : str
+        Column to groupby
+    mean_only : bool = False
+        Whether to plot only means and not min-max
+
+    Prints:
+    --------------------
+    Dynamics of the variables
+    """
+
+     # Creating grid of subplots
+    av_cols = data.drop(columns = [groupby]).columns
+    fig = make_subplots(rows = len(av_cols), cols = 1, subplot_titles = [col for col in av_cols])
+
+    # Calculating mean, min and max values of variables for each unique value in groupby column
+    data_mean = data.groupby(groupby).mean()
+    data_median = data.groupby(groupby).median()
+    if mean_only != True:
+        data_min = data.groupby(groupby).min()
+        data_max = data.groupby(groupby).max()
+
+    # Scattering returns
+    for i, col in enumerate(av_cols):
+        fig.add_trace(go.Scatter(x = data_mean.index, y = data_mean[col], mode = 'lines', name = f'{col}_mean', line = dict(color = 'green')), row = i + 1, col = 1)
+        fig.add_trace(go.Scatter(x = data_mean.index, y = data_median[col], mode = 'lines', name = f'{col}_median', line = dict(color = 'yellow')), row = i + 1, col = 1)
+        if mean_only != True:
+            fig.add_trace(go.Scatter(x = data_min.index, y = data_min[col], mode = 'lines', name = f'{col}_min', line = dict(color = 'red')), row = i + 1, col = 1)
+            fig.add_trace(go.Scatter(x = data_max.index, y = data_max[col], mode = 'lines', name = f'{col}_max', line = dict(color = 'blue')), row = i + 1, col = 1)
+        fig.update_xaxes(autorange = "reversed", row = i + 1, col = 1)
+
+    # Update layout
+    fig.update_layout(
+        showlegend = False,
+        template = 'plotly_dark',
+        font = dict(size = 20),
+        height = 300 * len(av_cols),
+        width = 1200
+    )
+
+    # Show the plot
+    fig.show()
+
+#---------------------------------------------------------------------------------------
+
+def heatmap(data):
+
+    """
+    Function for the plotting of the correlation heatmap
+
+    Inputs:
+    --------------------
+    data : pd.DataFrame
+        Dataframe with columns for the analysis
+    
+    Prints:
+    --------------------
+    Correlation heatmap
+    """
+
+    # Creating grid of subplots
+    fig = make_subplots(rows = 1, cols = 2, subplot_titles = ["Pearson Correlation", "Spearman Correlation"])
+
+    # Add trace for each correlation matrix
+    z1 = data.corr(method = 'pearson')
+    z2 = data.corr(method = 'spearman')
+    z = [z1, z2]
+    for i in range(len(z)):
+        fig.add_trace(go.Heatmap(z = z[i][::-1],
+                                 x = data.columns,
+                                 y = data.columns[::-1],
+                                 text = z[i][::-1].round(2),
+                                 texttemplate = "%{text}",
+                                 zmin = -1, zmax = 1), 
+                                 row = 1, col = i + 1)
+
+    # Update layout
+    fig.update_layout(
+        showlegend = False,
+        template = 'plotly_dark',
+        font = dict(size = 14),
+        height = 600,
+        width = 1600
+    )
+    fig.update_annotations(font_size = 30)
+
+    # Show the plot
+    fig.show()
 
 #---------------------------------------------------------------------------------------
 
@@ -92,7 +197,7 @@ def model_optimization(Y_train,
     Inputs:
     ----------
     Y_train, Y_test : array
-        Target variable for the regression
+        Target variable for the model
     X_train, X_test : DataFrame
         Set of X for the model
     type : str = 'Probit'
@@ -133,7 +238,7 @@ def model_optimization(Y_train,
     """
     
     # Set a negative significance flag for forest models
-    if type in ['RF', 'SVM', 'GB']:
+    if type in ['RF', 'SVM', 'LightGBM', 'XGBoost', 'CatBoost']:
         insignificant_feature = False
 
     if insignificant_feature == False:
@@ -144,17 +249,50 @@ def model_optimization(Y_train,
             else:
                 model = sm.Logit(Y_train, X_train)
             results = model.fit(disp = 0)
+        
         elif type in ['RF', 'SVM']:
+
+            depth = 5
+
             if type == 'RF':
-                model = ens.RandomForestClassifier(max_depth = 5, random_state = state, n_jobs = -1)
+                model = ens.RandomForestClassifier(max_depth = depth, random_state = state, n_jobs = -1)
             else:
                 model = svm.SVC(probability = True, random_state = state)
             model.fit(X_train, Y_train)
 
             # Get feature importance with feature permutation
             results = pi(model, X_test, Y_test, n_repeats = 10, random_state = state, n_jobs = -1)
+        
+        elif type in ['LightGBM', 'XGBoost', 'CatBoost']:
+
+            depth = 2
+
+            if type == 'LightGBM':
+                model = lgb.LGBMClassifier(max_depth = depth, metric = 'auc', importance_type = 'gain',
+                                           random_state = state, n_jobs = -1, verbosity = -1)
+                model.fit(X_train, Y_train, eval_set = [(X_test, Y_test)],
+                          callbacks = [lgb.early_stopping(100, verbose = False)])
+                
+                # Get feature importance
+                results = model.feature_importances_
+            
+            elif type == 'XGBoost':
+                model = xgb.XGBClassifier(max_depth = depth, eval_metric = 'auc', early_stopping_rounds = 100,
+                                          random_state = state, verbosity = 0, n_jobs = -1, use_label_encoder = False)
+                model.fit(X_train, Y_train, eval_set = [(X_test, Y_test)], verbose = False)
+
+                # Get feature importance
+                results = model.get_booster().get_score(importance_type = 'gain')
+            
+            else:
+                model = CatBoostClassifier(depth = depth, eval_metric = 'AUC', random_state = state, verbose = 0)
+                model.fit(X_train, Y_train, eval_set = [(X_test, Y_test)], early_stopping_rounds = 100, silent = True)
+                
+                # Get feature importance
+                results = model.get_feature_importance()
+
         else:
-            pass
+            raise ValueError(f"Model type '{type}' is not supported.")
 
     while insignificant_feature:
         # Create model
@@ -219,107 +357,6 @@ def model_optimization(Y_train,
 
 #---------------------------------------------------------------------------------------
 
-def heatmap(data):
-
-    """
-    Function for the plotting of the correlation heatmap
-
-    Inputs:
-    --------------------
-    data : pd.DataFrame
-        Dataframe with columns for the analysis
-    
-    Prints:
-    --------------------
-    Correlation heatmap
-    """
-
-    # Creating grid of subplots
-    fig = make_subplots(rows = 1, cols = 2, subplot_titles = ["Pearson Correlation", "Spearman Correlation"])
-
-    # Add trace for each correlation matrix
-    z1 = data.corr(method = 'pearson')
-    z2 = data.corr(method = 'spearman')
-    z = [z1, z2]
-    for i in range(len(z)):
-        fig.add_trace(go.Heatmap(z = z[i][::-1],
-                                 x = data.columns,
-                                 y = data.columns[::-1],
-                                 text = z[i][::-1].round(2),
-                                 texttemplate = "%{text}",
-                                 zmin = -1, zmax = 1), 
-                                 row = 1, col = i + 1)
-
-    # Update layout
-    fig.update_layout(
-        showlegend = False,
-        template = 'plotly_dark',
-        font = dict(size = 14),
-        height = 600,
-        width = 1600
-    )
-    fig.update_annotations(font_size = 30)
-
-    # Show the plot
-    fig.show()
-
-#---------------------------------------------------------------------------------------
-
-def variables_dynamics(data,
-                       groupby:str,
-                       mean_only:bool = False):
-
-    """
-    Function for the plotting of the dynamics for the variables
-
-    Inputs:
-    --------------------
-    data : pd.DataFrame
-        Dataframe with columns for the analysis
-    groupby : str
-        Column to groupby
-    mean_only : bool = False
-        Whether to plot only means and not min-max
-
-    Prints:
-    --------------------
-    Dynamics of the variables
-    """
-
-     # Creating grid of subplots
-    av_cols = data.drop(columns = [groupby]).columns
-    fig = make_subplots(rows = len(av_cols), cols = 1, subplot_titles = [col for col in av_cols])
-
-    # Calculating mean, min and max values of variables for each unique value in groupby column
-    data_mean = data.groupby(groupby).mean()
-    data_median = data.groupby(groupby).median()
-    if mean_only != True:
-        data_min = data.groupby(groupby).min()
-        data_max = data.groupby(groupby).max()
-
-    # Scattering returns
-    for i, col in enumerate(av_cols):
-        fig.add_trace(go.Scatter(x = data_mean.index, y = data_mean[col], mode = 'lines', name = f'{col}_mean', line = dict(color = 'green')), row = i + 1, col = 1)
-        fig.add_trace(go.Scatter(x = data_mean.index, y = data_median[col], mode = 'lines', name = f'{col}_median', line = dict(color = 'yellow')), row = i + 1, col = 1)
-        if mean_only != True:
-            fig.add_trace(go.Scatter(x = data_min.index, y = data_min[col], mode = 'lines', name = f'{col}_min', line = dict(color = 'red')), row = i + 1, col = 1)
-            fig.add_trace(go.Scatter(x = data_max.index, y = data_max[col], mode = 'lines', name = f'{col}_max', line = dict(color = 'blue')), row = i + 1, col = 1)
-        fig.update_xaxes(autorange = "reversed", row = i + 1, col = 1)
-
-    # Update layout
-    fig.update_layout(
-        showlegend = False,
-        template = 'plotly_dark',
-        font = dict(size = 20),
-        height = 300 * len(av_cols),
-        width = 1200
-    )
-
-    # Show the plot
-    fig.show()
-
-#---------------------------------------------------------------------------------------
-    
 def model(data,
           target:str,
           horizons:list,
@@ -441,7 +478,7 @@ def model(data,
                             except:
                                 pass
         
-        elif model in ['RF', 'SVM', 'GB']:
+        elif model in ['RF', 'SVM', 'LightGBM', 'XGBoost', 'CatBoost']:
             X_1 = data_testing_1.drop(columns = [target])
             share_1_orig = len(data_testing_1) / (len(data_testing_0) + len(data_testing_1))
             for share in shares:
@@ -451,17 +488,22 @@ def model(data,
                     X_train, X_test, Y_train, Y_test, share_1 = balance_and_split(data_testing_0, Y_1, share_1_orig, target, share, state)
 
                     # Calculate models and metrics
+                    results_rs, auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs, f1_train_rs,\
+                        f1_test_rs, pr_train_rs, pr_test_rs, rec_train_rs, rec_test_rs\
+                        = model_optimization(Y_train, Y_test, X_train, X_test, type = model, silent = True)
+                    
                     if model in ['RF', 'SVM']:
-                        results_rs, auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs, f1_train_rs,\
-                            f1_test_rs, pr_train_rs, pr_test_rs, rec_train_rs, rec_test_rs\
-                            = model_optimization(Y_train, Y_test, X_train, X_test, type = model, silent = True)
                         res.loc[len(res)] = [horizon, share, share_1, state, len(Y_train), len(Y_test),
-                                             auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs,
-                                             f1_train_rs, f1_test_rs, pr_train_rs, pr_test_rs,
-                                             rec_train_rs, rec_test_rs, 
-                                             pd.Series(results_rs.importances_mean, index = X_train.columns.values)]
+                                            auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs,
+                                            f1_train_rs, f1_test_rs, pr_train_rs, pr_test_rs,
+                                            rec_train_rs, rec_test_rs, 
+                                            pd.Series(results_rs.importances_mean, index = X_train.columns.values)]
                     else:
-                        pass
+                        res.loc[len(res)] = [horizon, share, share_1, state, len(Y_train), len(Y_test),
+                                            auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs,
+                                            f1_train_rs, f1_test_rs, pr_train_rs, pr_test_rs,
+                                            rec_train_rs, rec_test_rs, 
+                                            pd.Series(results_rs, index = X_train.columns.values)]
         else:
             raise ValueError('Unknown model type')
         
@@ -500,7 +542,7 @@ def save_results(res:pd.DataFrame,
     # Define where the data that needs to be transformed is stored
     if model in ['Logit', 'Probit']:
         info = 'Coeffs'
-    elif model in ['RF', 'SVM', 'GB']:
+    elif model in ['RF', 'SVM', 'LightGBM', 'XGBoost', 'CatBoost']:
         info = 'Importance'
         sep = False
     else:
