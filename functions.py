@@ -7,6 +7,7 @@ import xgboost as xgb
 from tqdm import tqdm
 import networkx as nx
 import lightgbm as lgb
+import tensorflow as tf
 import sklearn.svm as svm
 import statsmodels.api as sm
 import sklearn.ensemble as ens
@@ -201,7 +202,7 @@ def model_optimization(Y_train,
     X_train, X_test : DataFrame
         Set of X for the model
     type : str = 'Probit'
-        Type of the model - 'Logit', 'Probit', 'RF', 'SVM' or 'GB'
+        Type of the model - 'Logit', 'Probit', 'RF', 'SVM', 'GB' or 'NN'
     state : int = 0
         Random state for the forest and SVM models
     p_value_bord : float = 0.05
@@ -238,7 +239,7 @@ def model_optimization(Y_train,
     """
     
     # Set a negative significance flag for forest models
-    if type in ['RF', 'SVM', 'LightGBM', 'XGBoost', 'CatBoost']:
+    if type not in ['Probit', 'Logit']:
         insignificant_feature = False
 
     if insignificant_feature == False:
@@ -291,6 +292,21 @@ def model_optimization(Y_train,
                 # Get feature importance
                 results = model.get_feature_importance()
 
+        elif type == 'NN':
+            # Initiate the model with specific layers
+            model = tf.keras.models.Sequential([
+                tf.keras.layers.Dense(10, activation = 'relu', input_shape = (len(X_train.columns),)),
+                tf.keras.layers.Dense(1, activation = 'sigmoid')
+            ])
+
+            model.compile(optimizer = 'adam',
+                loss = 'binary_crossentropy',
+                metrics = ['AUC'])
+            
+            model.fit(X_train, Y_train, epochs=5)
+
+            # Get feature importance
+            results = None
         else:
             raise ValueError(f"Model type '{type}' is not supported.")
 
