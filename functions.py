@@ -25,7 +25,9 @@ np.random.seed(0)
 
 def variables_dynamics(data,
                        groupby:str,
-                       mean_only:bool = False):
+                       mean_only:bool = False,
+                       save:bool = False,
+                       file_name:str = None) -> None:
 
     """
     Function for the plotting of the dynamics for the variables
@@ -38,6 +40,10 @@ def variables_dynamics(data,
         Column to groupby
     mean_only : bool = False
         Whether to plot only means and not min-max
+    save : bool = False
+        Whether to save the plot
+    file_name : str = None
+        Name of the file to save the plot
 
     Prints:
     --------------------
@@ -58,20 +64,24 @@ def variables_dynamics(data,
     # Scattering returns
     for i, col in enumerate(av_cols):
         fig.add_trace(go.Scatter(x = data_mean.index, y = data_mean[col], mode = 'lines', name = f'{col}_mean', line = dict(color = 'green')), row = i + 1, col = 1)
-        fig.add_trace(go.Scatter(x = data_mean.index, y = data_median[col], mode = 'lines', name = f'{col}_median', line = dict(color = 'yellow')), row = i + 1, col = 1)
+        fig.add_trace(go.Scatter(x = data_mean.index, y = data_median[col], mode = 'lines', name = f'{col}_median', line = dict(color = 'purple')), row = i + 1, col = 1)
         if mean_only != True:
             fig.add_trace(go.Scatter(x = data_min.index, y = data_min[col], mode = 'lines', name = f'{col}_min', line = dict(color = 'red')), row = i + 1, col = 1)
             fig.add_trace(go.Scatter(x = data_max.index, y = data_max[col], mode = 'lines', name = f'{col}_max', line = dict(color = 'blue')), row = i + 1, col = 1)
         fig.update_xaxes(autorange = "reversed", row = i + 1, col = 1)
+        fig.add_vline(x = 0, line_width = 3, line_dash = 'dash', line_color = 'black', row = i + 1, col = 1)
 
     # Update layout
     fig.update_layout(
         showlegend = False,
-        template = 'plotly_dark',
         font = dict(size = 20),
         height = 300 * len(av_cols),
         width = 1200
     )
+
+    # Save the plot
+    if save == True:
+        fig.write_image(f'Plots/{file_name}.svg')
 
     # Show the plot
     fig.show()
@@ -112,7 +122,6 @@ def heatmap(data):
     # Update layout
     fig.update_layout(
         showlegend = False,
-        template = 'plotly_dark',
         font = dict(size = 14),
         height = 600,
         width = 1600
@@ -770,10 +779,12 @@ def spread_model(G:nx.Graph,
                  d:int, 
                  node:list, 
                  crit:int, 
-                 type:str = 'BTW') -> tuple:
+                 type:str = 'BTW',
+                 facilit_list:list = None) -> tuple:
     
     """
     Function for the implementation of different spread models on the graph.
+    Code for the facilitated models should be optimised further, but I gave up on it.
     
     Inputs:
     ---------
@@ -789,8 +800,10 @@ def spread_model(G:nx.Graph,
         The node to be processed.
     crit : int
         The critical value.
-    type : str
+    type : str = 'BTW'
         The type of model to be used. Default is 'BTW'. Other option: 'MA'.
+    facilit_list : list = None
+        List of nodes to facilitate the spread.
     
     Returns:
     ---------
@@ -805,27 +818,87 @@ def spread_model(G:nx.Graph,
     falls_d += 1
 
     # Iterate over nodes that have more than one edge
-    if node[0] not in ones:
-        neighbors = [n for n in G.neighbors(node[0])]
-        remains = copy.copy(crit)
-        for neighbor in G.nodes(data=True):
-            if neighbor[0] in neighbors:
-                # Spread the grains over the neighbors
-                if type == 'BTW':
-                    # Deterministic model
-                    neighbor[1]['day'+str(d+1)] += 1
-                elif type == 'MA':
-                    # Stochastic model
-                    n = np.random.randint(0, remains)
-                    remains -= n
-                    neighbor[1]['day'+str(d+1)] += n
-                else:
-                    raise ValueError('Wrong model type. Choose BTW or MA.')
+    if facilit_list == None:
+        if node[0] not in ones:
+            neighbors = [n for n in G.neighbors(node[0])]
+            remains = copy.copy(crit)
+            for neighbor in G.nodes(data=True):
+                if neighbor[0] in neighbors:
+                    # Spread the grains over the neighbors
+                    if type == 'BTW':
+                        # Deterministic model
+                        neighbor[1]['day'+str(d+1)] += 1
+                    elif type == 'MA':
+                        # Stochastic model
+                        n = np.random.randint(0, remains)
+                        remains -= n
+                        neighbor[1]['day'+str(d+1)] += n
+                    else:
+                        raise ValueError('Wrong model type. Choose BTW or MA.')
+        
+        # Update the number of grains in the node
+        node[1]['day'+str(d+1)] -= crit
     
-    # Update the number of grains in the node
-    node[1]['day'+str(d+1)] -= crit
+    else:
+        # Deterministic model
+        if type == 'BTW':
+            if node[0] not in ones:
+                neighbors = [n for n in G.neighbors(node[0])]
 
-    return G, falls_d
+                # Spread the grains over the neighbors from not less than critical node
+                if node[1]['day'+str(d)] >= crit:
+                    for neighbor in G.nodes(data=True):
+                        if neighbor[0] in neighbors:
+                            neighbor[1]['day'+str(d+1)] += 1
+                            facilit_list[d+1][neighbor[0]] += 1
+                    node[1]['day'+str(d+1)] -= crit
+
+                # Spread the grains over the neighbors from the facilitated node
+                elif node[1]['day'+str(d)] < crit and node[1]['day'+str(d)] > 0:
+                    remains = node[1]['day'+str(d)]
+                    for neighbor in G.nodes(data=True):
+                        if neighbor[0] in neighbors:
+                            n = np.random.randint(0, remains)
+                            remains -= n
+                            neighbor[1]['day'+str(d+1)] += n
+                            if n > 0:
+                                facilit_list[d+1][neighbor[0]] += 1
+                    node[1]['day'+str(d+1)] -= node[1]['day'+str(d)]
+            else:
+                node[1]['day'+str(d+1)] -= crit
+        
+        # Stochastic model
+        elif type == 'MA':
+            if node[0] not in ones:
+                neighbors = [n for n in G.neighbors(node[0])]
+
+                # Spread the grains over the neighbors from not less than critical node
+                if node[1]['day'+str(d)] >= crit:
+                    remains = copy.copy(crit)
+                    for neighbor in G.nodes(data=True):
+                        if neighbor[0] in neighbors:
+                            n = np.random.randint(0, remains)
+                            remains -= n
+                            neighbor[1]['day'+str(d+1)] += n
+                            if n > 0 and d+1 <= len(facilit_list):
+                                facilit_list[d+1][neighbor[0]] += 1
+                    node[1]['day'+str(d+1)] -= crit
+
+                # Spread the grains over the neighbors from the facilitated node
+                elif node[1]['day'+str(d)] < crit and node[1]['day'+str(d)] > 0:
+                    remains = node[1]['day'+str(d)]
+                    for neighbor in G.nodes(data=True):
+                        if neighbor[0] in neighbors:
+                            n = np.random.randint(0, remains)
+                            remains -= n
+                            neighbor[1]['day'+str(d+1)] += n
+                            if n > 0 and d+1 <= len(facilit_list):
+                                facilit_list[d+1][neighbor[0]] += 1
+                    node[1]['day'+str(d+1)] -= node[1]['day'+str(d)]
+            else:
+                node[1]['day'+str(d+1)] -= crit
+    
+    return G, falls_d, facilit_list
 
 #---------------------------------------------------------------------------------------
 
@@ -833,6 +906,7 @@ def spread(model:str,
            G:nx.Graph,
            number_of_days:int,
            new_grains:list,
+           facilitated:bool = False,
            ad_dissipation:bool = False,
            neutral_state:bool = False,
            new_grains_plus:list = None,
@@ -852,6 +926,8 @@ def spread(model:str,
         The number of days to simulate the spread.
     new_grains : list
         A list of lists, where each inner list contains the nodes where new grains are added on each day.
+    facilitated : bool = False
+        If True, the spread model includes spread based on the previous falls.
     ad_dissipation : bool
         If True, the spread model includes ad dissipation (+2-1 instead of +1-0).
     neutral_state : bool
@@ -862,6 +938,7 @@ def spread(model:str,
         A list of lists, where each inner list contains the nodes where new grains are subtracted on each day.
 
     Returns:
+    ---------
     falls : list 
         A list containing the number of falls for each day.
     """
@@ -880,44 +957,52 @@ def spread(model:str,
 
     # Create status dataframe
     status = pd.DataFrame()
-    for j in range(0, number_of_days):
-        status['day'+str(j)] = np.zeros(G.number_of_nodes())
+    for j in range(number_of_days):
+        status['day' + str(j)] = np.zeros(G.number_of_nodes())
 
     # Set node attributes
     node_attr = status.to_dict('index')
     nx.set_node_attributes(G, node_attr)
 
+    # Create a list of nodes to facilitate the spread if needed
+    if facilitated == True:
+        facilit_list = [[0 for x in range(G.number_of_nodes())] for z in range(number_of_days)]
+    else:
+        facilit_list = None
+
     # Simulate the spread
     for d in tqdm(range(0, number_of_days-1), disable = silent):
         falls_d = 0
 
-        # Add/subtract grains
+        # Add/subtract grains based on the model
         if ad_dissipation == True:
-            for node in G.nodes(data=True):
-                if node[0] in new_grains[d]:
-                    node[1]['day'+str(d)] += 1.0
-                if node[0] in new_grains_plus[d]:
-                    node[1]['day'+str(d)] += 1.0
+            for node in G.nodes(data = True):
+                if (node[0] in new_grains[d]) | (node[0] in new_grains_plus[d]):
+                    node[1]['day' + str(d)] += 1.0
                 if node[0] in new_grains_minus[d]:
-                    node[1]['day'+str(d)] -= 1.0          
-                node[1]['day'+str(d+1)] += node[1]['day'+str(d)]
+                    node[1]['day' + str(d)] -= 1.0          
+                node[1]['day' + str(d + 1)] += node[1]['day' + str(d)]
         elif neutral_state == True:
-            for node in G.nodes(data=True):
+            for node in G.nodes(data = True):
                 if node[0] in new_grains[d]:
-                    node[1]['day'+str(d)] += 1.0
+                    node[1]['day' + str(d)] += 1.0
                 if node[0] in new_grains_minus[d]:
-                    node[1]['day'+str(d)] -= 1.0          
-                node[1]['day'+str(d+1)] += node[1]['day'+str(d)]    
+                    node[1]['day' + str(d)] -= 1.0          
+                node[1]['day' + str(d + 1)] += node[1]['day' + str(d)]    
         else:
-            for node in G.nodes(data=True):
+            for node in G.nodes(data = True):
                 if node[0] in new_grains[d]:
-                    node[1]['day'+str(d)] += 1.0
-                node[1]['day'+str(d+1)] += node[1]['day'+str(d)]
+                    node[1]['day' + str(d)] += 1.0
+                node[1]['day' + str(d + 1)] += node[1]['day' + str(d)]
 
-        # Spread grains
-        for node in G.nodes(data=True):
-            if d <= (number_of_days-1) and node[1]['day'+str(d)] >= deg[node[0]] and deg[node[0]] > 0:
-                G, falls_d = spread_model(G, ones, falls_d, d, node, deg[node[0]], type = model)
+        # Spread grains for the base or for the facilitated model
+        for node in G.nodes(data = True):
+            if facilit_list == None:
+                if (d <= (number_of_days - 1)) and (node[1]['day' + str(d)] >= deg[node[0]]) and (deg[node[0]]) > 0:
+                    G, falls_d, _ = spread_model(G, ones, falls_d, d, node, deg[node[0]], type = model)
+            else:
+                if (d <= (number_of_days - 1)) and ((node[1]['day' + str(d)] >= deg[node[0]]) or (facilit_list[d][node[0]] >= 2)) and (deg[node[0]]) > 0:
+                    G, falls_d, facilit_list = spread_model(G, ones, falls_d, d, node, deg[node[0]], type = model, facilit_list = facilit_list)
 
         # Append number of falls
         if d <= number_of_days-2:
