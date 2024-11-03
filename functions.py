@@ -1,22 +1,30 @@
+# Base libraries
 import copy
 import operator
 import numpy as np
-import scipy as sp
 import pandas as pd
-import xgboost as xgb
 from tqdm import tqdm
+
+# Libraries for plotting
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+# Libraries for modelling
+import scipy as sp
+from scipy.fft import fft
 import networkx as nx
+from PyEMD import EMD
+import xgboost as xgb
 import lightgbm as lgb
 import tensorflow as tf
-import sklearn.svm as svm
 import statsmodels.api as sm
+from catboost import CatBoostClassifier
+import sklearn.svm as svm
+import sklearn.model_selection as modsel
 import sklearn.ensemble as ens
 import sklearn.metrics as metrics
-import plotly.graph_objects as go
-from catboost import CatBoostClassifier
-import sklearn.model_selection as modsel
-from plotly.subplots import make_subplots
 from sklearn.inspection import permutation_importance as pi
+from sklearn.feature_selection import mutual_info_regression
 
 np.random.seed(0)
 
@@ -1042,3 +1050,176 @@ def critical_transition(data:pd.DataFrame,
         data[f'{col}, Rise'] = (data[f'{col}, Dynamics MA'] > crit) & (data[f'{col}, Dynamics Var'] > crit)
 
     return data
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+
+def emd(signal, 
+        t, 
+        plot:bool = False):
+
+    """
+    Function for the decomposition of time series to the several components until the last one is monotonous
+    Source: https://towardsdatascience.com/improve-your-time-series-analysis-with-stochastic-and-deterministic-components-decomposition-464e623f8270
+    
+    Inputs:
+    ----------
+    signal : array
+        Time series for decomposition
+    t : array
+        Index of time series for plotting
+    plot : bool = False
+        Flag whether to plot of decomposed time series is needed
+
+    Plots:
+    ----------
+    Plots of original time series and its decomposed parts if plot == True
+
+    Returns:
+    ----------
+    imfs : array
+        Decomposed time series
+    """
+
+    # Separate time series into components
+    emd = EMD(DTYPE = np.float16, spline_kind = 'akima')
+    imfs = emd(signal.values)
+    N = imfs.shape[0]
+    
+    if plot:
+        # Creating grid of subplots
+        fig = make_subplots(rows = N + 1, cols = 1, subplot_titles = ['Original Signal'] + [f'IMF {i}' for i in range(N)])
+
+        # Scattering signal and IMFs
+        fig.add_trace(go.Scatter(x = t, y = signal, mode = 'lines', name = 'Original Signal'), row = 1, col = 1)
+        for i, imf in enumerate(imfs):
+            fig.add_trace(go.Scatter(x = t, y = imf, mode = 'lines', name = f'IMF {i}'), row = i + 2, col = 1)
+
+        # Update layout
+        fig.update_layout(
+            showlegend = False,
+            font = dict(size = 20),
+            height = 400 * (N + 1),
+            width = 2000
+        )
+        fig.show()
+
+    return imfs
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+
+def phase_spectrum(imfs):
+
+    """
+    Function for the calculation of the time series' phase spectrum
+    Source: https://towardsdatascience.com/improve-your-time-series-analysis-with-stochastic-and-deterministic-components-decomposition-464e623f8270
+    
+    Inputs:
+    ----------
+    imfs : array
+        Decomposed time series
+
+    Returns:
+    ----------
+    imfs_p : array
+        Phase spectrum of decomposed time series
+    """
+
+    # Iterate over decomposed timer series to calculate each ones phase spectrum
+    imfs_p = []
+    for imf in imfs:
+        trans = fft(imf)
+        imf_p = np.arctan(trans.imag / trans.real)
+        imfs_p.append(imf_p)
+
+    return imfs_p
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+
+def phase_mi(phases):
+
+    """
+    Function for the calculation of mutual information in the phases
+    Source: https://towardsdatascience.com/improve-your-time-series-analysis-with-stochastic-and-deterministic-components-decomposition-464e623f8270
+    
+    Inputs:
+    ----------
+    phases : array
+        Phase spectrum of decomposed time series
+    
+    Returns:
+    ----------
+    mis : array
+        Mutual information of phase spectrums of decomposed time series
+    """
+
+    # Iterate over phases to calculate mutual info
+    mis = []
+    for i in range(len(phases) - 1):
+        mis.append(mutual_info_regression(phases[i].reshape(-1, 1), phases[i + 1])[0])
+        
+    return np.array(mis)
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+
+def divide_signal(signal, 
+                  t, 
+                  imfs, 
+                  mis, 
+                  cutoff:float = 0.05, 
+                  plot = False):
+
+    """
+    Function for the final separation to the stohastic and determenistic components
+    Source: https://towardsdatascience.com/improve-your-time-series-analysis-with-stochastic-and-deterministic-components-decomposition-464e623f8270
+    
+    Inputs:
+    ----------
+    signal : array
+        Time series for decomposition
+    t : array
+        Index of time series for plotting
+    imfs : array
+        Decomposed time series
+    mis : array
+        Mutual information of phase spectrums of decomposed time series
+    cutoff : float = 0.05
+        Border of separation between stohastic and determenistic components
+    plot : bool = False
+        Flag whether to plot original time series, stohastic and determenistic components
+
+    Plots:
+    ----------
+    Plots of original time series, stohastic and determenistic components if plot == True
+
+    Returns:
+    ----------
+    stochastic_component : array
+        Sum of time series components that are considered stohastic
+    deterministic_component : array
+        Sum of time series components that are considered deterministic
+    """
+
+    # Separate time series to stohastic and deterministic components 
+    cut_point = np.where(mis > cutoff)[0][0]    
+    stochastic_component = np.sum(imfs[:cut_point], axis=0)
+    deterministic_component = np.sum(imfs[cut_point:], axis=0)
+
+    if plot:
+        # Creating grid of subplots
+        fig = make_subplots(rows = 3, cols = 1, subplot_titles = ['Original Signal', 'Stochastic Component', 'Deterministic Component'])
+        
+        # Scattering signal and components
+        fig.add_trace(go.Scatter(x = t, y = signal, mode = 'lines', name = 'Original Signal'), row = 1, col = 1)
+        fig.add_trace(go.Scatter(x = t, y = stochastic_component, mode = 'lines', name = 'Stochastic Component'), row = 2, col = 1)
+        fig.add_trace(go.Scatter(x = t, y = deterministic_component, mode = 'lines', name = 'Deterministic Component'), row = 3, col = 1)
+
+        # Update layout
+        fig.update_layout(
+            showlegend = False,
+            font = dict(size = 20),
+            height = 1200,
+            width = 2000
+        )
+        fig.show()
+    
+    return stochastic_component, deterministic_component
