@@ -31,12 +31,11 @@ np.random.seed(0)
 #---------------------------------------------------------------------------------------
 
 
-def variables_dynamics(data,
+def variables_dynamics(data:pd.DataFrame,
                        groupby:str,
                        mean_only:bool = False,
                        save:bool = False,
                        file_name:str = None) -> None:
-
     """
     Function for the plotting of the dynamics for the variables
 
@@ -96,8 +95,7 @@ def variables_dynamics(data,
 
 #---------------------------------------------------------------------------------------
 
-def heatmap(data):
-
+def heatmap(data:pd.DataFrame):
     """
     Function for the plotting of the correlation heatmap
 
@@ -397,7 +395,6 @@ def model(data,
           states:list,
           model:str = 'Probit',
           separate:bool = False) -> pd.DataFrame:
-    
     """
     Function for the Monte Carlo simulation of the samples and modelling
 
@@ -549,7 +546,6 @@ def save_results(res:pd.DataFrame,
                  model:str = 'Probit',
                  sep:bool = 'False',
                  path:str = 'Params') -> pd.DataFrame:
-    
     """
     Function for the saving of the simulation results
     
@@ -623,7 +619,6 @@ def generate_random_series(length:int,
                            mean:float = None, 
                            sigma:float = None, 
                            type:str = 'normal') -> pd.DataFrame:
-    
     """
     Function for the generation of random series
     
@@ -675,7 +670,6 @@ def graph_generation(graph_type:str,
                      ER_prob:float = None,
                      CL_average:int = None,
                      silent:bool = True) -> nx.Graph:
-    
     """
     Function that generates a graph based on the specified graph type.
 
@@ -731,7 +725,6 @@ def graph_generation(graph_type:str,
 def grain_generator(number_of_nodes:int, 
                     number_of_days:int, 
                     dist:str = 'uni') -> list:
-    
     """
     Generate grains to be put into the sand pile based on the specified distribution for a given number of nodes and days.
 
@@ -789,7 +782,6 @@ def spread_model(G:nx.Graph,
                  crit:int, 
                  type:str = 'BTW',
                  facilit_list:list = None) -> tuple:
-    
     """
     Function for the implementation of different spread models on the graph.
     Code for the facilitated models should be optimised further, but I gave up on it.
@@ -920,7 +912,6 @@ def spread(model:str,
            new_grains_plus:list = None,
            new_grains_minus: list = None,
            silent:bool = True) -> list:
-    
     """
     Function for modelling of sand grain spread with Bak-Tang-Wiesenfeld and Manna on random graphs.
 
@@ -1023,7 +1014,6 @@ def spread(model:str,
 def critical_transition(data:pd.DataFrame,
                         crit:int,
                         window:int) -> pd.DataFrame:
-    
     """
     Function for the calculation of the critical transition.
 
@@ -1056,7 +1046,6 @@ def critical_transition(data:pd.DataFrame,
 def emd(signal, 
         t, 
         plot:bool = False):
-
     """
     Function for the decomposition of time series to the several components until the last one is monotonous
     Source: https://towardsdatascience.com/improve-your-time-series-analysis-with-stochastic-and-deterministic-components-decomposition-464e623f8270
@@ -1108,7 +1097,6 @@ def emd(signal,
 #---------------------------------------------------------------------------------------------------------------------------------------
 
 def phase_spectrum(imfs):
-
     """
     Function for the calculation of the time series' phase spectrum
     Source: https://towardsdatascience.com/improve-your-time-series-analysis-with-stochastic-and-deterministic-components-decomposition-464e623f8270
@@ -1136,7 +1124,6 @@ def phase_spectrum(imfs):
 #---------------------------------------------------------------------------------------------------------------------------------------
 
 def phase_mi(phases):
-
     """
     Function for the calculation of mutual information in the phases
     Source: https://towardsdatascience.com/improve-your-time-series-analysis-with-stochastic-and-deterministic-components-decomposition-464e623f8270
@@ -1167,7 +1154,6 @@ def divide_signal(signal,
                   mis, 
                   cutoff:float = 0.05, 
                   plot = False):
-
     """
     Function for the final separation to the stohastic and determenistic components
     Source: https://towardsdatascience.com/improve-your-time-series-analysis-with-stochastic-and-deterministic-components-decomposition-464e623f8270
@@ -1223,3 +1209,82 @@ def divide_signal(signal,
         fig.show()
     
     return stochastic_component, deterministic_component
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+
+def find_rise(data:pd.DataFrame,
+              column:str,
+              ma:float,
+              mv:float,
+              window:int) -> pd.DataFrame:
+    """
+    Function for the calculation of critical transitions in the time series
+
+    Inputs:
+    ----------
+    data : pd.DataFrame
+        Dataframe with data for the analysis
+    column : str
+        Column for the analysis
+    ma : float
+        Critical value for MA
+    mv : float
+        Critical value for MV
+    window : str
+        The window size for MA and MV
+
+    Returns:
+    ----------
+    data_final : pd.DataFrame
+        Dataframe with calculated values
+    """
+    # Get column for the analysis
+    data_final = pd.DataFrame(data.index).set_index(0)
+    data_final = data[column].to_frame().dropna()
+
+    # Calculate MA and MV
+    data_final[f'MA{window}'] = data_final[column].rolling(int(window)).mean()
+    data_final[f'MV{window}'] = data_final[column].rolling(int(window)).var()
+
+    # Calculate dynamics for MA and MV
+    data_final['Dynamics MA'] = data_final[f'MA{window}'] / data_final[f'MA{window}'].shift(5)
+    data_final['Dynamics MV'] = data_final[f'MV{window}'] / data_final[f'MV{window}'].shift(5)
+
+    # Find critical transitions
+    data_final['Rise'] = (data_final['Dynamics MA'] >= ma) & (data_final['Dynamics MV'] >= mv)
+    return data_final
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+
+def find_transitions(data_final:pd.DataFrame,
+                     distance:int,
+                     tail:int):
+    """
+    Function for the calculation of critical transitions in the time series
+
+    Inputs:
+    ----------
+    data_final : pd.DataFrame
+        Dataframe with data for the analysis
+    distance : int
+        Distance between critical transitions
+    tail : int
+        Tail of critical transitions that will separate it from noise outliers
+
+    Returns:
+    ----------
+    data_transitions : pd.DataFrame
+        Dataframe with calculated values
+    """
+
+    # Separate critical transitions from the dataset
+    data_transitions = data_final[data_final['Rise'] == True]
+    transitions = data_transitions.index
+    final_transitions = []
+
+    # Find transitions that have the sufficient distance between them and previous ones
+    for i, index in enumerate(transitions):
+        if i < len(transitions) - 1:
+            if index - transitions[i - 1] > distance + tail:
+                final_transitions.append(index)
+    return data_transitions[data_transitions.index.isin(final_transitions)]
