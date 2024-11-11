@@ -9,16 +9,21 @@ from tqdm import tqdm
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Libraries for modelling
+# Libraries for metrics'calculation
+from PyEMD import EMD
+import nolds
+import pymultifracs.mfa as mfa
+from pymultifracs.utils import build_q_log
 import scipy as sp
 from scipy.fft import fft
+
+# Libraries for modelling
 import networkx as nx
-from PyEMD import EMD
-import xgboost as xgb
 import lightgbm as lgb
+import xgboost as xgb
+from catboost import CatBoostClassifier
 import tensorflow as tf
 import statsmodels.api as sm
-from catboost import CatBoostClassifier
 import sklearn.svm as svm
 import sklearn.model_selection as modsel
 import sklearn.ensemble as ens
@@ -1257,6 +1262,9 @@ def find_rise(data:pd.DataFrame,
 #---------------------------------------------------------------------------------------------------------------------------------------
 
 def find_transitions(data_final:pd.DataFrame,
+                     ma:float,
+                     mv:float,
+                     window:int,
                      distance:int,
                      tail:int):
     """
@@ -1266,8 +1274,14 @@ def find_transitions(data_final:pd.DataFrame,
     ----------
     data_final : pd.DataFrame
         Dataframe with data for the analysis
+    ma : float
+        Critical value for MA
+    mv : float
+        Critical value for MV
+    window : str
+        The window size for MA and MV
     distance : int
-        Distance between critical transitions
+        Minimal distance between critical transitions
     tail : int
         Tail of critical transitions that will separate it from noise outliers
 
@@ -1282,9 +1296,159 @@ def find_transitions(data_final:pd.DataFrame,
     transitions = data_transitions.index
     final_transitions = []
 
-    # Find transitions that have the sufficient distance between them and previous ones
+    # Find transitions that have the sufficient distance between them and previous ones and have a tail
     for i, index in enumerate(transitions):
         if i < len(transitions) - 1:
-            if index - transitions[i - 1] > distance + tail:
-                final_transitions.append(index)
+            if (index >= distance) & (index - transitions[i - 1] > distance + tail):
+               if (data_final[f'MA{window}'][index + tail].item() / data_final[f'MA{window}'][index - 5].item() > ma) &\
+                (data_final[f'MV{window}'][index + tail].item() / data_final[f'MV{window}'][index - 5].item() > mv):
+                    final_transitions.append(index)
     return data_transitions[data_transitions.index.isin(final_transitions)]
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+
+def get_metrics(data:pd.DataFrame,
+                active_tickers:list,
+                ma:float,
+                mv:float,
+                window:int,
+                distance:int,
+                tail:int,
+                window_metrics:int) -> pd.DataFrame:
+    """
+    Function for the calculation of metrics for the modelling
+
+    Inputs:
+    ----------
+    data : pd.DataFrame
+        Dataframe with data for the analysis
+    active_tickers : list
+        List of active tickers
+    ma : float
+        Critical value for MA
+    mv : float
+        Critical value for MV
+    window : int
+        The window size for MA and MV
+    distance : int
+        Minimal distance between critical transitions
+    tail : int
+        Tail of critical transitions that will separate it from noise outliers
+    window_metrics : int
+        The window size for metrics
+
+    Returns:
+    ----------
+    ds : pd.DataFrame
+        Dataframe with calculated values
+    """
+
+    # Calculating metrics
+    ds = pd.DataFrame()
+    for ticker in tqdm(active_tickers):
+        data_ticker = data[[ticker, f'{ticker}, MA{window}', f'{ticker}, MV{window}', f'{ticker}, Rise']].dropna().reset_index(drop = True)
+        data_ticker.rename(columns = {ticker: 'Volume', f'{ticker}, MA{window}': f'MA{window}', f'{ticker}, MV{window}': f'MV{window}', f'{ticker}, Rise': 'Rise'}, inplace = True)
+        
+        # Get indices of critical transitions
+        rises_ticker = find_transitions(data_ticker, ma, mv, window, distance, tail).index
+
+        # Iterating over tickers
+        for ind in rises_ticker:
+            ds_ticker_ind = data_ticker.iloc[ind - distance: ind + tail]
+            ds_ticker_ind['Distance'] = - ds_ticker_ind.index + ind
+            ds_ticker_ind['Index'] = ind
+            ds_ticker_ind['Ticker'] = ticker
+            ds_ticker_ind.reset_index(drop = True, inplace = True)
+
+            Hurst = []
+            corr_dim = []
+            l_exp = []
+            var = []
+            skew = []
+            kurt = []
+            PSD = []
+            acf_1 = []
+            wl_c1 = []
+            wl_c2 = []
+            wl_c3 = []
+
+            for j in range(len(ds_ticker_ind)):
+                # Skipping first {window_metrics iterations which number is smaller than the needed window size
+                if j <= window_metrics:
+                    Hurst.append(None)
+                    corr_dim.append(None)
+                    l_exp.append(None)
+                    var.append(None)
+                    skew.append(None)
+                    kurt.append(None)
+                    PSD.append(None)
+                    acf_1.append(None)
+                    wl_c1.append(None)
+                    wl_c2.append(None)
+                    wl_c3.append(None)
+                # Calculating metrics for the rest of the time series
+                else:
+                    data_before_j = ds_ticker_ind.iloc[j - window_metrics + 1 : j + 1]
+
+                    Hurst.append(nolds.hurst_rs(data_before_j['Volume']))
+
+                    corr_dim.append(nolds.corr_dim(data_before_j['Volume'], 10))
+
+                    # Lyapunov exponent may throw an error if the series is too close to constant
+                    try:
+                        l_exp.append(nolds.lyap_r(data_before_j['Volume']))
+                    except:
+                        l_exp.append(None)
+
+                    var.append(data_before_j['Volume'].var())
+
+                    skew.append(data_before_j['Volume'].skew())
+
+                    kurt.append(data_before_j['Volume'].kurt())
+
+                    freq_j, psd_j = sp.signal.welch(data_before_j['Volume'])
+                    PSD.append(np.polyfit(np.log(freq_j)[1:j], np.log(psd_j)[1:j], 1)[0])
+
+                    acf_1.append(sm.tsa.acf(data_before_j['Volume'], nlags = 1)[1])
+                    
+                    # Set of the available scaling ranges heavily depends on the size of the dataset
+                    # So, we are checking better scaling range and then downsizing if it raises error
+                    try:
+                        dwt, lwt = mfa.mf_analysis_full(data_before_j['Volume'].values,
+                            scaling_ranges = [(2, 5)],
+                            q = build_q_log(1, 10, 20),
+                            n_cumul = 3,
+                            p_exp = np.inf,
+                            gamint = 0.0
+                        )
+                    except:
+                        dwt, lwt = mfa.mf_analysis_full(data_before_j['Volume'].values,
+                            scaling_ranges = [(2, 4)],
+                            q = build_q_log(1, 10, 20),
+                            n_cumul = 3,
+                            p_exp = np.inf,
+                            gamint = 0.0
+                        )
+                    _, lwt_cumul, _, _ = lwt
+                    wl_c1.append(lwt_cumul.log_cumulants[0][0][0])
+                    wl_c2.append(lwt_cumul.log_cumulants[1][0][0])
+                    wl_c3.append(lwt_cumul.log_cumulants[2][0][0])
+
+            ds_ticker_ind['Hurst'] = Hurst
+            ds_ticker_ind['CorrDim'] = corr_dim
+            # ds_ticker_ind['Lyapunov'] = l_exp
+            ds_ticker_ind['Variance'] = var
+            ds_ticker_ind['Skewness'] = skew
+            ds_ticker_ind['Kurtosis'] = kurt
+            ds_ticker_ind['PSD'] = PSD
+            ds_ticker_ind['ACF_1'] = acf_1
+            ds_ticker_ind['WL_C1'] = wl_c1
+            ds_ticker_ind['WL_C2'] = wl_c2
+            ds_ticker_ind['WL_C3'] = wl_c3
+            ds_ticker_ind.dropna(inplace = True)
+
+            ds = pd.concat([ds, ds_ticker_ind])
+
+    # Return calculated metrics
+    ds.reset_index(drop = True, inplace = True)
+    return ds
