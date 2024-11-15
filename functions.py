@@ -194,7 +194,7 @@ def remove_most_insignificant(X,
     """
     
     # Use operator to find the key which belongs to the maximum value in the dictionary
-    max_p_value = max(results.pvalues.iteritems(), key = operator.itemgetter(1))[0]
+    max_p_value = max(results.pvalues.items(), key = operator.itemgetter(1))[0]
     # Drop the worst feature
     X.drop(columns = max_p_value, inplace = True)
     X_test.drop(columns = max_p_value, inplace = True)
@@ -286,10 +286,11 @@ def model_optimization(Y_train,
         
         elif type in ['LightGBM', 'XGBoost', 'CatBoost']:
 
-            depth = 2
+            depth = 3
 
             if type == 'LightGBM':
                 model = lgb.LGBMClassifier(max_depth = depth, metric = 'auc', importance_type = 'gain',
+                                           min_data_in_leaf = 10,
                                            random_state = state, n_jobs = -1, verbosity = -1)
                 model.fit(X_train, Y_train, eval_set = [(X_test, Y_test)],
                           callbacks = [lgb.early_stopping(100, verbose = False)])
@@ -427,14 +428,16 @@ def model(data,
     """
 
     def balance_and_split(data_testing_0, Y_1, share_1_orig, target, share, state, model = 'Probit'):
-
-        # Drop part of the negative samples to balance sample
-        _, X_0, _, Y_0 = modsel.train_test_split(data_testing_0.drop(columns = [target]), data_testing_0[target], 
-                                                 test_size = min(share_1_orig * (1 - share) / share, 1), random_state = state)
-        share_1 = len(Y_1) / (len(Y_0) + len(Y_1))
-        Y = pd.concat([Y_0, Y_1])
-        if model in ['Logit', 'Probit']:
-            X = sm.add_constant(pd.concat([X_0, X_1]))
+        
+        # Balance the negative and positive samples if needed
+        if share != None:
+            # Drop part of the negative samples to balance sample
+            _, X_0, _, Y_0 = modsel.train_test_split(data_testing_0.drop(columns = [target]), data_testing_0[target], 
+                                                     test_size = min(share_1_orig * (1 - share) / share, 1), random_state = state)
+            share_1 = len(Y_1) / (len(Y_0) + len(Y_1))
+            Y = pd.concat([Y_0, Y_1])
+            if model in ['Logit', 'Probit']:
+                X = sm.add_constant(pd.concat([X_0, X_1]))
 
         # Split the data into train and test
         X_train, X_test, Y_train, Y_test = modsel.train_test_split(X, Y, test_size = 0.2, random_state = state)
@@ -449,13 +452,13 @@ def model(data,
                'Train precision', 'Test precision', 
                'Train recall', 'Test recall'] 
     
+    # Update set of columns for the dataframe
     if model in ['Logit', 'Probit']:
         columns += ['Coeffs']
+        if separate == True:
+            columns = columns[:4] + ['Variable'] + columns[4:] + ['Pvalues']
     else:
         columns += ['Importance']
-
-    if separate == True:
-        columns = columns[:4] + ['Variable'] + columns[4:] + ['Pvalues']
 
     # Create dataframe for the results
     res = pd.DataFrame(columns = columns)
@@ -521,6 +524,7 @@ def model(data,
 
                     # Balance classes and split the data into train and test
                     X_train, X_test, Y_train, Y_test, share_1 = balance_and_split(data_testing_0, Y_1, share_1_orig, target, share, state)
+                    # return X_train, X_test, Y_train, Y_test, share_1
 
                     # Calculate models and metrics
                     results_rs, auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs, f1_train_rs,\
@@ -549,7 +553,7 @@ def model(data,
 def save_results(res:pd.DataFrame,
                  cols:list,
                  model:str = 'Probit',
-                 sep:bool = 'False',
+                 sep:bool = False,
                  path:str = 'Params') -> pd.DataFrame:
     """
     Function for the saving of the simulation results
@@ -598,8 +602,8 @@ def save_results(res:pd.DataFrame,
         groups = ['Horizon', '1 Share', '1 Share real']
         drops = ['State']
     else:
-        res['Const'] = res['Coeffs'].apply(lambda x: x['const'])
-        res['Const_Pvalue'] = res['Pvalues'].apply(lambda x: x['const'])
+        res['Const'] = res['Coeffs'].apply(lambda x: x['const'].item())
+        res['Const_Pvalue'] = res['Pvalues'].apply(lambda x: x['const'].item())
         coef = []
         coef_p = []
         for row in res.itertuples():
@@ -1395,6 +1399,7 @@ def get_metrics(data:pd.DataFrame,
                     corr_dim.append(nolds.corr_dim(data_before_j['Volume'], 10))
 
                     # Lyapunov exponent may throw an error if the series is too close to constant
+                    # Lyapunov exponent may throw a ceil error if Nolds > 0.5.2 as l_exp is broken in 0.6.0 and 0.6.1
                     try:
                         l_exp.append(nolds.lyap_r(data_before_j['Volume']))
                     except:
@@ -1436,7 +1441,7 @@ def get_metrics(data:pd.DataFrame,
 
             ds_ticker_ind['Hurst'] = Hurst
             ds_ticker_ind['CorrDim'] = corr_dim
-            # ds_ticker_ind['Lyapunov'] = l_exp
+            ds_ticker_ind['Lyapunov'] = l_exp
             ds_ticker_ind['Variance'] = var
             ds_ticker_ind['Skewness'] = skew
             ds_ticker_ind['Kurtosis'] = kurt
@@ -1445,10 +1450,55 @@ def get_metrics(data:pd.DataFrame,
             ds_ticker_ind['WL_C1'] = wl_c1
             ds_ticker_ind['WL_C2'] = wl_c2
             ds_ticker_ind['WL_C3'] = wl_c3
-            ds_ticker_ind.dropna(inplace = True)
+            # ds_ticker_ind.dropna(inplace = True)
 
             ds = pd.concat([ds, ds_ticker_ind])
 
     # Return calculated metrics
     ds.reset_index(drop = True, inplace = True)
     return ds
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+
+def generate_features(data:pd.DataFrame,
+                      cols:list,
+                      lag_model:list) -> pd.DataFrame:
+    """
+    Function for the generation of features for the modelling
+
+    Inputs:
+    ----------
+    data : pd.DataFrame
+        Dataframe with data for the analysis
+    cols : list
+        List of columns for the analysis
+    lag_model : list
+        List of lags for the analysis
+
+    Returns:
+    ----------
+    data_logdyn : pd.DataFrame
+        Dataframe with calculated values
+    """
+
+    # Get unique indices
+    indices = data.groupby(['Ticker', 'Index']).size().index.values
+
+    # Calculate dynamics and short variance
+    # Original idea about variance was born from the largest Lyapunov exponent's behaviour before the critical transition point:
+    # is mostly didn't move in nominal values but its variance in some cases decreased signigicantly 
+    data_logdyn = pd.DataFrame()
+    for ind in tqdm(indices):
+        data_ind = data[(data['Ticker'] == ind[0]) & (data['Index'] == ind[1])]
+        for col in cols:
+            for lag_m in lag_model:
+                data_ind[col + '_' + str(lag_m) + '_dyn'] = data_ind[col] / data_ind[col].shift(lag_m) - 1
+                data_ind[col + '_' + str(lag_m) + '_Variance'] = data_ind[col].rolling(lag_m).var()
+        data_ind.dropna(inplace = True)
+        data_logdyn = pd.concat([data_logdyn, data_ind])
+
+    # Reset index to get rid of dates
+    data_logdyn.reset_index(drop = True, inplace = True)
+    data_logdyn = data_logdyn[data_logdyn['Distance'] > 0]
+
+    return data_logdyn
