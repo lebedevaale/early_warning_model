@@ -211,7 +211,8 @@ def model_optimization(Y_train,
                        state:int = 0,
                        p_value_bord:float = 0.05, 
                        silent:bool = False,
-                       insignificant_feature:bool = True) -> tuple:
+                       insignificant_feature:bool = True,
+                       target_metric:str = 'AUC') -> tuple:
     """
     Function for the optimization of OLS
 
@@ -231,6 +232,8 @@ def model_optimization(Y_train,
         Whether not to show reports about model
     insignificant_feature : bool = True
         Whether to drop insignificant features or to keep them
+    target_metric:str = 'AUC'
+        Metric for the target, options: 'AUC', 'Precision
 
     Returns:
     ----------
@@ -286,11 +289,14 @@ def model_optimization(Y_train,
         
         elif type in ['LightGBM', 'XGBoost', 'CatBoost']:
 
+            metrics_mapper = {'LightGBM_AUC': 'auc', 'XGBoost_AUC': 'auc', 'CatBoost_AUC': 'AUC',
+                              'LightGBM_Precision': 'average_precision', 'XGBoost_Precision': 'pre', 'CatBoost_Precision': 'Precision'}
+
             depth = 3
 
             if type == 'LightGBM':
-                model = lgb.LGBMClassifier(max_depth = depth, metric = 'auc', importance_type = 'gain',
-                                           min_data_in_leaf = 10,
+                model = lgb.LGBMClassifier(max_depth = depth, metric = metrics_mapper[f'{type}_{target_metric}'], 
+                                           importance_type = 'gain', min_data_in_leaf = 10,
                                            random_state = state, n_jobs = -1, verbosity = -1)
                 model.fit(X_train, Y_train, eval_set = [(X_test, Y_test)],
                           callbacks = [lgb.early_stopping(100, verbose = False)])
@@ -299,7 +305,8 @@ def model_optimization(Y_train,
                 results = model.feature_importances_
             
             elif type == 'XGBoost':
-                model = xgb.XGBClassifier(max_depth = depth, eval_metric = 'auc', early_stopping_rounds = 100,
+                model = xgb.XGBClassifier(max_depth = depth, eval_metric = metrics_mapper[f'{type}_{target_metric}'],
+                                          early_stopping_rounds = 100,
                                           random_state = state, verbosity = 0, n_jobs = -1, use_label_encoder = False)
                 model.fit(X_train, Y_train, eval_set = [(X_test, Y_test)], verbose = False)
 
@@ -307,7 +314,8 @@ def model_optimization(Y_train,
                 results = model.get_booster().get_score(importance_type = 'gain')
             
             else:
-                model = CatBoostClassifier(depth = depth, eval_metric = 'AUC', random_state = state, verbose = 0)
+                model = CatBoostClassifier(depth = depth, eval_metric = metrics_mapper[f'{type}_{target_metric}'],
+                                           random_state = state, verbose = 0)
                 model.fit(X_train, Y_train, eval_set = [(X_test, Y_test)], early_stopping_rounds = 100, silent = True)
                 
                 # Get feature importance
@@ -400,7 +408,8 @@ def model(data,
           shares:list,
           states:list,
           model:str = 'Probit',
-          separate:bool = False) -> pd.DataFrame:
+          separate:bool = False,
+          target_metric:str = 'AUC') -> pd.DataFrame:
     """
     Function for the Monte Carlo simulation of the samples and modelling
 
@@ -420,6 +429,8 @@ def model(data,
         Model type: 'Logit', 'Probit', 'RF', 'SVM' or 'GB
     separate : bool = False
         Whether to calculate whole logit or probit models or to separate variables to different models
+    target_metric : str = 'AUC'
+        Metric for the target, options: 'AUC', 'Precision
 
     Returns:
     --------------------
