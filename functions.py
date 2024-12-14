@@ -204,8 +204,10 @@ def remove_most_insignificant(X,
 #---------------------------------------------------------------------------------------
 
 def model_optimization(Y_train,
+                       Y_val,
                        Y_test,
                        X_train,
+                       X_val,
                        X_test,
                        type:str = 'Probit',
                        state:int = 0,
@@ -218,9 +220,9 @@ def model_optimization(Y_train,
 
     Inputs:
     ----------
-    Y_train, Y_test : array
+    Y_train, Y_val, Y_test : array
         Target variable for the model
-    X_train, X_test : DataFrame
+    X_train, X_val, X_test : DataFrame
         Set of X for the model
     type : str = 'Probit'
         Type of the model - 'Logit', 'Probit', 'RF', 'SVM', 'GB' or 'NN'
@@ -232,33 +234,23 @@ def model_optimization(Y_train,
         Whether not to show reports about model
     insignificant_feature : bool = True
         Whether to drop insignificant features or to keep them
-    target_metric:str = 'AUC'
+    target_metric : str = 'AUC'
         Metric for the target, options: 'AUC', 'Precision
 
     Returns:
     ----------
     results : model
         Fitted statsmodels model
-    auc_train : float
-        AUC on the train data
-    auc_test : float
-        AUC on the test data
-    ks_train.pvalue : float
-        KS-test p-value on the train data
-    ks_test.pvalue : float
-        KS-test p-value on the test data
-    f1_train : float
-        F1-score on the train data
-    f1_test : float
-        F1-score on the test data
-    pr_train : float
-        Precision score on the train data
-    pr_test : float
-        Precision score on the test data
-    rec_train : float
-        Recall score on the train data
-    rec_test : float
-        Recall score on the test data
+    [auc_train, auc_val, auc_test] : list[float, float, float]
+        AUCs
+    [ks_train.pvalue, ks_val.pvalue, ks_test.pvalue] : list[float, float, float]
+        KS-test p-values
+    [f1_train, f1_val, f1_test] : list[float, float, float]
+        F1-scores
+    [pr_train, pr_val, pr_test] : list[float, float, float]
+        Precision scores
+    [rec_train, rec_val, rec_test] : list[float, float, float]
+        Recall scores
     """
     
     # Set a negative significance flag for forest models
@@ -292,13 +284,13 @@ def model_optimization(Y_train,
             metrics_mapper = {'LightGBM_AUC': 'auc', 'XGBoost_AUC': 'auc', 'CatBoost_AUC': 'AUC',
                               'LightGBM_Precision': 'average_precision', 'XGBoost_Precision': 'pre', 'CatBoost_Precision': 'Precision'}
 
-            depth = 3
+            depth = 2
 
             if type == 'LightGBM':
                 model = lgb.LGBMClassifier(max_depth = depth, metric = metrics_mapper[f'{type}_{target_metric}'], 
-                                           importance_type = 'gain', min_data_in_leaf = 10,
+                                           importance_type = 'gain', min_data_in_leaf = 15,
                                            random_state = state, n_jobs = -1, verbosity = -1)
-                model.fit(X_train, Y_train, eval_set = [(X_test, Y_test)],
+                model.fit(X_train, Y_train, eval_set = [(X_val, Y_val)],
                           callbacks = [lgb.early_stopping(100, verbose = False)])
                 
                 # Get feature importance
@@ -306,9 +298,9 @@ def model_optimization(Y_train,
             
             elif type == 'XGBoost':
                 model = xgb.XGBClassifier(max_depth = depth, eval_metric = metrics_mapper[f'{type}_{target_metric}'],
-                                          early_stopping_rounds = 100,
+                                          early_stopping_rounds = 100, min_child_weight = 10, 
                                           random_state = state, verbosity = 0, n_jobs = -1, use_label_encoder = False)
-                model.fit(X_train, Y_train, eval_set = [(X_test, Y_test)], verbose = False)
+                model.fit(X_train, Y_train, eval_set = [(X_val, Y_val)], verbose = False)
 
                 # Get feature importance
                 results = model.get_booster().get_score(importance_type = 'gain')
@@ -316,7 +308,7 @@ def model_optimization(Y_train,
             else:
                 model = CatBoostClassifier(depth = depth, eval_metric = metrics_mapper[f'{type}_{target_metric}'],
                                            random_state = state, verbose = 0)
-                model.fit(X_train, Y_train, eval_set = [(X_test, Y_test)], early_stopping_rounds = 100, silent = True)
+                model.fit(X_train, Y_train, eval_set = [(X_val, Y_val)], early_stopping_rounds = 100, silent = True)
                 
                 # Get feature importance
                 results = model.get_feature_importance()
@@ -359,17 +351,22 @@ def model_optimization(Y_train,
                 insignificant_feature = False
             else:
                 X_train, X_test = remove_most_insignificant(X_train, X_test, results)
-    
+                X_val = X_val[X_val.columns[X_val.columns.isin(X_train.columns)]]
+
     # Predictions and AUC
     if type in ['Logit', 'Probit']:
         Y_train_pred = results.predict(X_train)
+        Y_val_pred = results.predict(X_val)
         Y_test_pred = results.predict(X_test)
     else:
         Y_train_pred = model.predict_proba(X_train)[:, 1]
+        Y_val_pred = model.predict_proba(X_val)[:, 1]
         Y_test_pred = model.predict_proba(X_test)[:, 1]
     auc_train, threshold_train = roc_metric(Y_train, Y_train_pred)
+    auc_val, threshold_val = roc_metric(Y_val, Y_val_pred)
     auc_test, threshold_test = roc_metric(Y_test, Y_test_pred)
     Y_train_pred_round = np.where(Y_train_pred < threshold_train, np.floor(Y_train_pred), np.ceil(Y_train_pred))
+    Y_val_pred_round = np.where(Y_val_pred < threshold_val, np.floor(Y_val_pred), np.ceil(Y_val_pred))
     Y_test_pred_round = np.where(Y_test_pred < threshold_test, np.floor(Y_test_pred), np.ceil(Y_test_pred))
 
     # KS-test
@@ -377,6 +374,10 @@ def model_optimization(Y_train,
     ks_samples_train_posi = ks_samples_train[ks_samples_train['Y'] == 1]['Y_pred']
     ks_samples_train_nega = ks_samples_train[ks_samples_train['Y'] == 0]['Y_pred']
     ks_train = sp.stats.kstest(ks_samples_train_posi, ks_samples_train_nega)
+    ks_samples_val = pd.DataFrame({'Y': Y_val, 'Y_pred': Y_val_pred})
+    ks_samples_val_posi = ks_samples_val[ks_samples_val['Y'] == 1]['Y_pred']
+    ks_samples_val_nega = ks_samples_val[ks_samples_val['Y'] == 0]['Y_pred']
+    ks_val = sp.stats.kstest(ks_samples_val_posi, ks_samples_val_nega)
     ks_samples_test = pd.DataFrame({'Y': Y_test, 'Y_pred': Y_test_pred})
     ks_samples_test_posi = ks_samples_test[ks_samples_test['Y'] == 1]['Y_pred']
     ks_samples_test_nega = ks_samples_test[ks_samples_test['Y'] == 0]['Y_pred']
@@ -384,21 +385,28 @@ def model_optimization(Y_train,
 
     # F1-score, precision and recall
     f1_train = round(metrics.f1_score(Y_train, Y_train_pred_round), 3)
+    f1_val = round(metrics.f1_score(Y_val, Y_val_pred_round), 3)
     f1_test = round(metrics.f1_score(Y_test, Y_test_pred_round), 3)
     pr_train = round(metrics.precision_score(Y_train, Y_train_pred_round), 3)
+    pr_val = round(metrics.precision_score(Y_val, Y_val_pred_round), 3)
     pr_test = round(metrics.precision_score(Y_test, Y_test_pred_round), 3)
     rec_train = round(metrics.recall_score(Y_train, Y_train_pred_round), 3)
+    rec_val = round(metrics.recall_score(Y_val, Y_val_pred_round), 3)
     rec_test = round(metrics.recall_score(Y_test, Y_test_pred_round), 3)
     if silent == False:
         print(f'''Train AUC score: {auc_train}, Train KS-test p-value: {round(ks_train.pvalue, 3)}, 
               Train F1-score: {f1_train}, Train precision: {pr_train}, Train recall: {rec_train}''')
+        print(f'''Validation AUC score: {auc_test}, Validation KS-test p-value: {round(ks_test.pvalue, 3)}, 
+              Validation F1-score: {f1_test}, Validation precision: {pr_test}, Validation recall: {rec_test}''')
         print(f'''Test AUC score: {auc_test}, Test KS-test p-value: {round(ks_test.pvalue, 3)}, 
               Test F1-score: {f1_test}, Test precision: {pr_test}, Test recall: {rec_test}''')
         if type in ['Logit', 'Probit']:
             print(results.summary())
 
-    return results, auc_train, auc_test, round(ks_train.pvalue, 9), round(ks_test.pvalue, 9),\
-           f1_train, f1_test, pr_train, pr_test, rec_train, rec_test
+    return results, [auc_train, auc_val, auc_test],\
+           [round(ks_train.pvalue, 9), round(ks_val.pvalue, 9), round(ks_test.pvalue, 9)],\
+           [f1_train, f1_val, f1_test], [pr_train, pr_val, pr_test],\
+           [rec_train, rec_val, rec_test]
 
 #---------------------------------------------------------------------------------------
 
@@ -450,18 +458,20 @@ def model(data,
             if model in ['Logit', 'Probit']:
                 X = sm.add_constant(pd.concat([X_0, X_1]))
 
-        # Split the data into train and test
+        # Split the data into train, validation and test
         X_train, X_test, Y_train, Y_test = modsel.train_test_split(X, Y, test_size = 0.2, random_state = state)
+        X_train, X_val, Y_train, Y_val = modsel.train_test_split(X_train, Y_train, test_size = 0.16, random_state = state)
         
-        return X_train, X_test, Y_train, Y_test, share_1
+        return X_train, X_val, X_test, Y_train, Y_val, Y_test, share_1
 
     # Define columns for the dataframe
     columns = ['Horizon', '1 Share', '1 Share real', 'State',
-               'Train size', 'Test size', 'Train AUC', 'Test AUC',
-               'Train KS-test p-value', 'Test KS-test p-value',
-               'Train F1-score', 'Test F1-score', 
-               'Train precision', 'Test precision', 
-               'Train recall', 'Test recall'] 
+               'Train size', 'Validation size', 'Test size',
+               'Train AUC', 'Validation AUC', 'Test AUC',
+               'Train KS-test p-value', 'Validation KS-test p-value', 'Test KS-test p-value',
+               'Train F1-score', 'Validation F1-score', 'Test F1-score', 
+               'Train precision', 'Validation precision', 'Test precision', 
+               'Train recall', 'Validation recall', 'Test recall'] 
     
     # Update set of columns for the dataframe
     if model in ['Logit', 'Probit']:
@@ -494,16 +504,17 @@ def model(data,
                     for state in states:
 
                         # Balance classes and split the data into train and test
-                        X_train, X_test, Y_train, Y_test, share_1 = balance_and_split(data_testing_0, Y_1, share_1_orig, target, share, state)
+                        X_train, X_val, X_test, Y_train, Y_val, Y_test, share_1 = balance_and_split(data_testing_0, Y_1, share_1_orig,
+                                                                                                    target,share, state)
                         
                         # Calculate models and metrics
-                        results_rs, auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs, f1_train_rs,\
-                            f1_test_rs, pr_train_rs, pr_test_rs, rec_train_rs, rec_test_rs\
-                            = model_optimization(Y_train, Y_test, X_train, X_test, type = model, silent = True)
-                        res.loc[len(res)] = [horizon, share, share_1, state, len(Y_train), len(Y_test),
-                                             auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs,
-                                             f1_train_rs, f1_test_rs, pr_train_rs, pr_test_rs,
-                                             rec_train_rs, rec_test_rs, results_rs.params]
+                        results_rs, auc_rs, ks_rs, f1_rs, pr_rs, rec_rs,\
+                            = model_optimization(Y_train, Y_val, Y_test, X_train, X_val, X_test, type = model, 
+                                                 silent = True, target_metric = target_metric)
+                        res.loc[len(res)] = [horizon, share, share_1, state,
+                                             len(Y_train), len(Y_val), len(Y_test),
+                                             *auc_rs, *ks_rs, *f1_rs, *pr_rs, *rec_rs,
+                                             results_rs.params]
             else:
                 for col in data_testing.columns.drop(target):
                     X_1 = data_testing_1[col]
@@ -512,18 +523,18 @@ def model(data,
                         for state in states:
 
                             # Balance classes and split the data into train and test
-                            X_train, X_test, Y_train, Y_test, share_1 = balance_and_split(data_testing_0, Y_1, share_1_orig, target, share, state)
+                            X_train, X_val, X_test, Y_train, Y_val, Y_test, share_1 = balance_and_split(data_testing_0, Y_1, share_1_orig,
+                                                                                                        target, share, state)
                             
                             # Calculate models and metrics
                             try:
-                                results_rs, auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs, f1_train_rs,\
-                                    f1_test_rs, pr_train_rs, pr_test_rs, rec_train_rs, rec_test_rs\
-                                    = model_optimization(Y_train, Y_test, X_train, X_test, type = model, 
-                                                        silent = True, insignificant_feature = False)
-                                res.loc[len(res)] = [horizon, share, share_1, state, col, len(Y_train), len(Y_test),
-                                                     auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs,
-                                                     f1_train_rs, f1_test_rs, pr_train_rs, pr_test_rs,
-                                                     rec_train_rs, rec_test_rs, results_rs.params, results_rs.pvalues]
+                                results_rs, results_rs, auc_rs, ks_rs, f1_rs, pr_rs, rec_rs,\
+                                    = model_optimization(Y_train, Y_val, Y_test, X_train, X_val, X_test, type = model, 
+                                                        silent = True, insignificant_feature = False, target_metric = target_metric)
+                                res.loc[len(res)] = [horizon, share, share_1, state, col,
+                                                     len(Y_train), len(Y_val), len(Y_test),
+                                                     *auc_rs, *ks_rs, *f1_rs, *pr_rs, *rec_rs, 
+                                                     results_rs.params, results_rs.pvalues]
                             except:
                                 pass
         
@@ -534,26 +545,24 @@ def model(data,
                 for state in states:
 
                     # Balance classes and split the data into train and test
-                    X_train, X_test, Y_train, Y_test, share_1 = balance_and_split(data_testing_0, Y_1, share_1_orig, target, share, state)
-                    # return X_train, X_test, Y_train, Y_test, share_1
+                    X_train, X_val, X_test, Y_train, Y_val, Y_test, share_1 = balance_and_split(data_testing_0, Y_1, share_1_orig,
+                                                                                                target, share, state)
 
                     # Calculate models and metrics
-                    results_rs, auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs, f1_train_rs,\
-                        f1_test_rs, pr_train_rs, pr_test_rs, rec_train_rs, rec_test_rs\
-                        = model_optimization(Y_train, Y_test, X_train, X_test, type = model, silent = True)
+                    results_rs, auc_rs, ks_rs, f1_rs, pr_rs, rec_rs,\
+                        = model_optimization(Y_train, Y_val, Y_test, X_train, X_val, X_test, type = model,
+                                             silent = True, target_metric = target_metric)
                     
                     if model in ['RF', 'SVM']:
-                        res.loc[len(res)] = [horizon, share, share_1, state, len(Y_train), len(Y_test),
-                                            auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs,
-                                            f1_train_rs, f1_test_rs, pr_train_rs, pr_test_rs,
-                                            rec_train_rs, rec_test_rs, 
-                                            pd.Series(results_rs.importances_mean, index = X_train.columns.values)]
+                        res.loc[len(res)] = [horizon, share, share_1, state,
+                                             len(Y_train), len(Y_val), len(Y_test),
+                                             *auc_rs, *ks_rs, *f1_rs, *pr_rs, *rec_rs, 
+                                             pd.Series(results_rs.importances_mean, index = X_train.columns.values)]
                     else:
-                        res.loc[len(res)] = [horizon, share, share_1, state, len(Y_train), len(Y_test),
-                                            auc_train_rs, auc_test_rs, ks_train_rs, ks_test_rs,
-                                            f1_train_rs, f1_test_rs, pr_train_rs, pr_test_rs,
-                                            rec_train_rs, rec_test_rs, 
-                                            pd.Series(results_rs, index = X_train.columns.values)]
+                        res.loc[len(res)] = [horizon, share, share_1, state,
+                                             len(Y_train), len(Y_val), len(Y_test),
+                                             *auc_rs, *ks_rs, *f1_rs, *pr_rs, *rec_rs, 
+                                             pd.Series(results_rs, index = X_train.columns.values)]
         else:
             raise ValueError('Unknown model type')
         
