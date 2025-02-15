@@ -4,6 +4,7 @@ import operator
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from pathlib import Path
 
 # Libraries for plotting
 import plotly.graph_objects as go
@@ -18,6 +19,8 @@ import scipy as sp
 from scipy.fft import fft
 
 # Libraries for modelling
+import optuna
+optuna.logging.set_verbosity(optuna.logging.CRITICAL)
 import networkx as nx
 import lightgbm as lgb
 import xgboost as xgb
@@ -235,7 +238,7 @@ def model_optimization(Y_train,
     insignificant_feature : bool = True
         Whether to drop insignificant features or to keep them
     target_metric : str = 'AUC'
-        Metric for the target, options: 'AUC', 'Precision
+        Metric for the target, options: 'AUC', 'Precision'
 
     Returns:
     ----------
@@ -408,6 +411,50 @@ def model_optimization(Y_train,
            [f1_train, f1_val, f1_test], [pr_train, pr_val, pr_test],\
            [rec_train, rec_val, rec_test]
 
+
+#---------------------------------------------------------------------------------------
+def split_train_val_test(X,
+                         Y, 
+                         state:int = 0,
+                         sample_sizes:list = [0.6, 0.2, 0.2]):
+    """
+    Function for splitting the dataset into train, validation and test sets
+
+    Inputs:
+    --------------------
+    X : pd.DataFrame
+        Dataframe with features
+    Y : pd.Series
+        Series with target variable
+    state : int = 0
+        Random state for splitting
+    sample_sizes : list = [0.6, 0.2, 0.2]
+        List of sample sizes for train, validation and test sets
+
+    Returns:
+    --------------------
+    X_train : pd.DataFrame
+        Dataframe with features for train set
+    X_val : pd.DataFrame
+        Dataframe with features for validation set
+    X_test : pd.DataFrame
+        Dataframe with features for test set
+    Y_train : pd.Series 
+        Series with target variable for train set
+    Y_val : pd.Series
+        Series with target variable for validation set
+    Y_test : pd.Series
+        Series with target variable for test set
+    """
+    # Check whether sample sizes are set to the correct sum
+    if sum(sample_sizes) != 1:
+        raise ValueError('Sample sizes must sum to 1')
+    
+    # Split the dataset
+    X_train, X_test, Y_train, Y_test = modsel.train_test_split(X, Y, test_size = sample_sizes[2], random_state = state)
+    X_train, X_val, Y_train, Y_val = modsel.train_test_split(X_train, Y_train, test_size = sample_sizes[1] / (1 - sample_sizes[2]), random_state = state)
+
+    return X_train, X_val, X_test, Y_train, Y_val, Y_test
 #---------------------------------------------------------------------------------------
 
 def model(data,
@@ -446,8 +493,42 @@ def model(data,
         Dataframe with raw statistical results of the modelling
     """
 
-    def balance_and_split(data_testing_0, Y_1, share_1_orig, target, share, state, model = 'Probit'):
-        
+    def balance_and_split(data_testing_0, Y_1, share_1_orig, target, state, share = None, model = 'Probit'):
+        """
+        Function to balance the dataset and split it into train, validation and test
+
+        Inputs:
+        --------------------
+        data_testing_0 : pd.DataFrame
+            Dataframe with data for modelling
+        Y_1 : pd.Series
+            Series with target values
+        share_1_orig : float
+            Share of target equal to 1 in the dataset
+        target : str
+            Name of the target column
+        state : int
+            Random state for the forest and SVM models
+        share : float = None
+            Share of target equal to 1 in the train dataset
+        model : str = 'Probit'
+            Model type: 'Logit', 'Probit', 'RF', 'SVM' or 'GB
+
+        Returns:
+        --------------------
+        X_train : pd.DataFrame
+            Dataframe with train data
+        X_val : pd.DataFrame
+            Dataframe with validation data
+        X_test : pd.DataFrame
+            Dataframe with test data
+        Y_train : pd.Series
+            Series with train target values
+        Y_val : pd.Series
+            Series with validation target values
+        Y_test : pd.Series
+            Series with test target values
+        """
         # Balance the negative and positive samples if needed
         if share != None:
             # Drop part of the negative samples to balance sample
@@ -457,11 +538,12 @@ def model(data,
             Y = pd.concat([Y_0, Y_1])
             if model in ['Logit', 'Probit']:
                 X = sm.add_constant(pd.concat([X_0, X_1]))
+        else:
+            share_1 = None
 
         # Split the data into train, validation and test
-        X_train, X_test, Y_train, Y_test = modsel.train_test_split(X, Y, test_size = 0.2, random_state = state)
-        X_train, X_val, Y_train, Y_val = modsel.train_test_split(X_train, Y_train, test_size = 0.16, random_state = state)
-        
+        X_train, X_val, X_test, Y_train, Y_val, Y_test = split_train_val_test(X, Y, state = state)
+
         return X_train, X_val, X_test, Y_train, Y_val, Y_test, share_1
 
     # Define columns for the dataframe
@@ -1522,3 +1604,230 @@ def generate_features(data:pd.DataFrame,
     data_logdyn = data_logdyn[data_logdyn['Distance'] > 0]
 
     return data_logdyn
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+
+def optuna_and_boosting(data:pd.DataFrame,
+                        horizons:list[int], 
+                        random_state:int, 
+                        directory:str = '',
+                        shaps:bool = True):
+    
+    """
+    Main function for the estimation of the boosting models
+
+    Inputs:
+    ----------
+    data : pd.DataFrame
+        Dataframe with data for modelling
+    horizons : list[int]
+        List of possible horizons
+    random_state : int
+        Seed for the RNG
+    directory : str = ''
+        Directory where data is stored if it isn't CWD
+    shaps : bool = True
+        Whether to calculate SHAP values for the model
+    
+    Prints:
+    ----------
+    Training process and scores of LightGBM, XGBoost and Catboost models
+    Stacking results
+    Comparison of the models by scores on validation and test
+
+    Files:
+    ----------
+    Model params for LightGBM, XGBoost, Catboost and stacking models
+    Predictions and target values for validation and testing
+    """
+
+    for horizon in horizons:
+
+        # Get data
+        data['Flag'] = data['Distance'].apply(lambda x: 0 if x > horizon else 1)
+        X = data.drop(['Volume', 'MA100', 'MV100', 'Rise', 'Distance', 'Index', 'Ticker', 'Flag'], axis = 1)
+        Y = data['Flag']
+
+        # Split the data into train, validation and test
+        X_train, X_val, X_test, Y_train, Y_val, Y_test = split_train_val_test(X, Y, state = random_state)
+
+        # Fixed hyperparams for the models
+        param_lgb = {
+            "verbosity": -1,
+            "objective": "binary",
+            "metric": "auc",
+            "boosting_type": "gbdt",
+            "random_state": random_state,
+            # "device": "gpu",
+            # "gpu_platform_id": 0,
+            # "gpu_device_id": 0
+        }
+
+        param_xgb = {
+            "verbosity": 0,
+            "objective": "binary:logistic",
+            "eval_metric": "auc",
+            "booster": "gbtree",
+            "random_state": random_state,
+            # "device": "gpu"
+        }
+
+        param_cat = {
+            "verbose": False,
+            "loss_function": "Logloss",
+            "eval_metric": "AUC",
+            "bootstrap_type": "Bayesian",
+            "random_seed": random_state,
+            # "task_type": "GPU", 
+            # "devices": "0:1"
+        }
+
+        # Since LightGBM 4.0.0 early stopping was removed from the params and moved to the callback
+        train_param_lgb = {
+            "num_boost_round": 500
+        }
+        callbacks_lgb = [lgb.early_stopping(stopping_rounds = 100, verbose = False), lgb.log_evaluation(-1)]
+
+        train_param_xgb = {
+            "num_boost_round": 500,
+            "early_stopping_rounds": 100,
+            "verbose_eval": 100
+        }
+
+        train_param_cat = {
+            'early_stopping_rounds': 100,
+            'verbose_eval': 100
+        }
+
+        # Create folder to store model data for specific horizon
+        Path.mkdir(Path(f'{directory}/Models/{horizon}'), parents = True, exist_ok = True)
+
+        dirs = {
+            'lgb': f'{directory}/Models/{horizon}/lgb.txt',
+            'xgb': f'{directory}/Models/{horizon}/xgb.json',
+            'cat': f'{directory}/Models/{horizon}/cat'
+        }
+
+        def objective_lgb(trial):
+
+            param = {
+                "learning_rate": trial.suggest_float("learning_rate", 0.2, 0.5, step = 0.05),
+                "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log = True),
+                "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log = True),
+                "num_leaves": trial.suggest_int("num_leaves", 2, 256),
+                "feature_fraction": trial.suggest_float("feature_fraction", 0.4, 1.0),
+                "bagging_fraction": trial.suggest_float("bagging_fraction", 0.4, 1.0),
+                "bagging_freq": trial.suggest_int("bagging_freq", 1, 7),
+                "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
+                "max_depth": trial.suggest_int("max_depth", 2, 4),
+                "min_gain_to_split": trial.suggest_float("min_gain_to_split", 0.0, 1.0),
+                "max_bin": trial.suggest_int("max_bin", 50, 500),
+                "extra_trees": trial.suggest_categorical("extra_trees", [True, False])
+            }
+            param.update(param_lgb)
+
+            train_param = {
+                "num_boost_round": 500
+            }
+
+            dtrain = lgb.Dataset(X_train, label = Y_train)
+            dvalid = lgb.Dataset(X_val, label = Y_val)
+            gbm = lgb.train(param, dtrain, valid_sets = dvalid, callbacks = callbacks_lgb, **train_param)
+            Y_val_pred = gbm.predict(X_val)
+            auc, _ = roc_metric(Y_val, Y_val_pred)
+
+            return auc
+
+        #---------------------------------------------------------------------------------------------------------------------------------------
+
+        def objective_xgb(trial):
+
+            param = {
+                "learning_rate": trial.suggest_float("learning_rate", 0.2, 0.5, step = 0.05),
+                "alpha": trial.suggest_float("alpha", 1e-8, 1.0, log = True),
+                "lambda": trial.suggest_float("lambda", 1e-8, 1.0, log = True),
+                "subsample": trial.suggest_float("subsample", 0.2, 1.0),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.2, 1.0),
+                "max_depth": trial.suggest_int("max_depth", 2, 4),
+                "min_child_weight": trial.suggest_int("min_child_weight", 2, 10),
+                "eta": trial.suggest_float("eta", 1e-8, 1.0, log = True),
+                "gamma": trial.suggest_float("gamma", 1e-8, 1.0, log = True),
+                "grow_policy": trial.suggest_categorical("grow_policy", ["depthwise", "lossguide"]),
+                "max_delta_step": trial.suggest_int("max_delta_step", 0, 10),
+                "scale_pos_weight": trial.suggest_float("scale_pos_weight", 0.1, 10.0),
+                "monotone_constraints": trial.suggest_categorical("monotone_constraints", ["(0,0,0)", "(1,0,-1)"])
+            }
+            param.update(param_xgb)
+
+            train_param = {
+                "num_boost_round": 500,
+                "early_stopping_rounds": 100,
+                "verbose_eval": False
+            }
+
+            dtrain = xgb.DMatrix(X_train, label = Y_train)
+            dvalid = xgb.DMatrix(X_val, label = Y_val)
+            gbm = xgb.train(param, dtrain, evals = [(dtrain, 'train') , (dvalid, 'valid')], **train_param)
+            Y_val_pred = gbm.predict(dvalid)
+            auc, _ = roc_metric(Y_val, Y_val_pred)
+
+            return auc
+
+        #---------------------------------------------------------------------------------------------------------------------------------------
+
+        def objective_cat(trial):
+
+            param = {
+                "learning_rate": trial.suggest_float("learning_rate", 0.2, 0.5, step = 0.05),
+                "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.01, 0.1),
+                "depth": trial.suggest_int("depth", 2, 4),
+                "boosting_type": trial.suggest_categorical("boosting_type", ["Ordered", "Plain"]),
+                "bagging_temperature": trial.suggest_float("bagging_temperature", 0, 10),
+                "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1e-8, 10.0, log = True),
+                "border_count": trial.suggest_int("border_count", 32, 255)
+            }
+            param.update(param_cat)
+
+            train_param = {
+                "early_stopping_rounds": 100, 
+                "verbose_eval": False
+            }
+
+            gbm = CatBoostClassifier(**param)
+            gbm.fit(X_train, Y_train, eval_set = [(X_val, Y_val)], **train_param)
+            Y_val_pred = gbm.predict(X_val)
+            auc, _ = roc_metric(Y_val, Y_val_pred)
+
+            return auc
+
+        #---------------------------------------------------------------------------------------------------------------------------------------
+
+        def optuna_study(model):
+
+            objectives = {
+                "lgb": objective_lgb,
+                "xgb": objective_xgb,
+                "cat": objective_cat
+            }
+
+            sampler = optuna.samplers.TPESampler(seed = random_state)
+            study = optuna.create_study(direction = "maximize", sampler = sampler)
+            study.optimize(objectives[model], n_trials = 5, n_jobs = 1, gc_after_trial = True, show_progress_bar = True)
+            trial = study.best_trial
+
+            return trial
+        
+        # Find optimal hyperparams for LightGBM with Optuna
+        print(f'\n LightGBM, {horizon} horizon:')
+        trial_lgb = optuna_study('lgb')
+        trial_lgb.params.update(param_lgb)
+
+        # Find optimal hyperparams for XGBoost with Optuna
+        print(f'\n XGBoost, {horizon} horizon:')
+        trial_xgb = optuna_study('xgb')
+        trial_xgb.params.update(param_xgb)
+
+        # Find optimal hyperparams for CatBoost with Optuna
+        print(f'\n CatBoost, {horizon} horizon:')
+        trial_cat = optuna_study('cat')
+        trial_cat.params.update(param_cat)
