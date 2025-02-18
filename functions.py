@@ -7,10 +7,12 @@ from tqdm import tqdm
 from pathlib import Path
 
 # Libraries for plotting
+import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # Libraries for metrics'calculation
+import shap
 from PyEMD import EMD
 import nolds
 import pymultifracs.mfa as mfa
@@ -206,6 +208,92 @@ def remove_most_insignificant(X,
 
 #---------------------------------------------------------------------------------------
 
+def get_preds_and_stats(type:str,
+                        dataset:dict,
+                        model,
+                        results,
+                        proba:bool = True):
+    """
+    Function for the calculation of predictions and statistics for the model
+
+    Inputs:
+    ----------
+    type : str
+        Model type - 'Logit', 'Probit', 'RF', 'SVM' or 'GB'
+    dataset : dict
+        Dictionary with the sets of X and Y for the model
+    model : model
+        Fitted model
+    results : model
+        Fitted statsmodels model
+
+    Returns:
+    ----------
+    preds : list
+        List of predictions for the subsanples
+    auc : list
+        List of AUC metrics for the model
+    ks : list
+        List of KS-test p-values for the model
+    f1 : list
+        List of F1-score metrics for the model
+    pr : list
+        List of precision metrics for the model
+    rec : list
+        List of recall metrics for the model
+    """
+
+    # Predictions and AUCs
+    if type in ['Logit', 'Probit']:
+        Y_train_pred = results.predict(dataset['X_train'])
+        Y_val_pred = results.predict(dataset['X_val'])
+        Y_test_pred = results.predict(dataset['X_test'])
+    elif proba == True:
+        Y_train_pred = model.predict_proba(dataset['X_train'])[:, 1]
+        Y_val_pred = model.predict_proba(dataset['X_val'])[:, 1]
+        Y_test_pred = model.predict_proba(dataset['X_test'])[:, 1]
+    else:
+        Y_train_pred = model.predict(dataset['X_train'])
+        Y_val_pred = model.predict(dataset['X_val'])
+        Y_test_pred = model.predict(dataset['X_test'])
+    auc_train, threshold_train = roc_metric(dataset['Y_train'], Y_train_pred)
+    auc_val, threshold_val = roc_metric(dataset['Y_val'], Y_val_pred)
+    auc_test, threshold_test = roc_metric(dataset['Y_test'], Y_test_pred)
+    Y_train_pred_round = np.where(Y_train_pred < threshold_train, np.floor(Y_train_pred), np.ceil(Y_train_pred))
+    Y_val_pred_round = np.where(Y_val_pred < threshold_val, np.floor(Y_val_pred), np.ceil(Y_val_pred))
+    Y_test_pred_round = np.where(Y_test_pred < threshold_test, np.floor(Y_test_pred), np.ceil(Y_test_pred))
+
+    # KS-test
+    ks_samples_train = pd.DataFrame({'Y': dataset['Y_train'], 'Y_pred': Y_train_pred})
+    ks_samples_train_posi = ks_samples_train[ks_samples_train['Y'] == 1]['Y_pred']
+    ks_samples_train_nega = ks_samples_train[ks_samples_train['Y'] == 0]['Y_pred']
+    ks_train = sp.stats.kstest(ks_samples_train_posi, ks_samples_train_nega)
+    ks_samples_val = pd.DataFrame({'Y': dataset['Y_val'], 'Y_pred': Y_val_pred})
+    ks_samples_val_posi = ks_samples_val[ks_samples_val['Y'] == 1]['Y_pred']
+    ks_samples_val_nega = ks_samples_val[ks_samples_val['Y'] == 0]['Y_pred']
+    ks_val = sp.stats.kstest(ks_samples_val_posi, ks_samples_val_nega)
+    ks_samples_test = pd.DataFrame({'Y': dataset['Y_test'], 'Y_pred': Y_test_pred})
+    ks_samples_test_posi = ks_samples_test[ks_samples_test['Y'] == 1]['Y_pred']
+    ks_samples_test_nega = ks_samples_test[ks_samples_test['Y'] == 0]['Y_pred']
+    ks_test = sp.stats.kstest(ks_samples_test_posi, ks_samples_test_nega)
+
+    # F1-score, precision and recall
+    f1_train = round(metrics.f1_score(dataset['Y_train'], Y_train_pred_round), 3)
+    f1_val = round(metrics.f1_score(dataset['Y_val'], Y_val_pred_round), 3)
+    f1_test = round(metrics.f1_score(dataset['Y_test'], Y_test_pred_round), 3)
+    pr_train = round(metrics.precision_score(dataset['Y_train'], Y_train_pred_round), 3)
+    pr_val = round(metrics.precision_score(dataset['Y_val'], Y_val_pred_round), 3)
+    pr_test = round(metrics.precision_score(dataset['Y_test'], Y_test_pred_round), 3)
+    rec_train = round(metrics.recall_score(dataset['Y_train'], Y_train_pred_round), 3)
+    rec_val = round(metrics.recall_score(dataset['Y_val'], Y_val_pred_round), 3)
+    rec_test = round(metrics.recall_score(dataset['Y_test'], Y_test_pred_round), 3)
+
+    return [Y_train_pred, Y_val_pred, Y_test_pred], [auc_train, auc_val, auc_test],\
+           [round(ks_train.pvalue, 6), round(ks_val.pvalue, 6), round(ks_test.pvalue, 6)],\
+           [f1_train, f1_val, f1_test], [pr_train, pr_val, pr_test], [rec_train, rec_val, rec_test]
+
+#---------------------------------------------------------------------------------------
+
 def model_optimization(Y_train,
                        Y_val,
                        Y_test,
@@ -356,61 +444,23 @@ def model_optimization(Y_train,
                 X_train, X_test = remove_most_insignificant(X_train, X_test, results)
                 X_val = X_val[X_val.columns[X_val.columns.isin(X_train.columns)]]
 
-    # Predictions and AUC
-    if type in ['Logit', 'Probit']:
-        Y_train_pred = results.predict(X_train)
-        Y_val_pred = results.predict(X_val)
-        Y_test_pred = results.predict(X_test)
-    else:
-        Y_train_pred = model.predict_proba(X_train)[:, 1]
-        Y_val_pred = model.predict_proba(X_val)[:, 1]
-        Y_test_pred = model.predict_proba(X_test)[:, 1]
-    auc_train, threshold_train = roc_metric(Y_train, Y_train_pred)
-    auc_val, threshold_val = roc_metric(Y_val, Y_val_pred)
-    auc_test, threshold_test = roc_metric(Y_test, Y_test_pred)
-    Y_train_pred_round = np.where(Y_train_pred < threshold_train, np.floor(Y_train_pred), np.ceil(Y_train_pred))
-    Y_val_pred_round = np.where(Y_val_pred < threshold_val, np.floor(Y_val_pred), np.ceil(Y_val_pred))
-    Y_test_pred_round = np.where(Y_test_pred < threshold_test, np.floor(Y_test_pred), np.ceil(Y_test_pred))
+    # Get predictions and test results
+    dataset = {'X_train': X_train, 'X_val': X_val, 'X_test': X_test,
+               'Y_train': Y_train, 'Y_val': Y_val, 'Y_test': Y_test}
+    _, aucs, kss, f1s, prs, recs = get_preds_and_stats(type, dataset, model, results)
 
-    # KS-test
-    ks_samples_train = pd.DataFrame({'Y': Y_train, 'Y_pred': Y_train_pred})
-    ks_samples_train_posi = ks_samples_train[ks_samples_train['Y'] == 1]['Y_pred']
-    ks_samples_train_nega = ks_samples_train[ks_samples_train['Y'] == 0]['Y_pred']
-    ks_train = sp.stats.kstest(ks_samples_train_posi, ks_samples_train_nega)
-    ks_samples_val = pd.DataFrame({'Y': Y_val, 'Y_pred': Y_val_pred})
-    ks_samples_val_posi = ks_samples_val[ks_samples_val['Y'] == 1]['Y_pred']
-    ks_samples_val_nega = ks_samples_val[ks_samples_val['Y'] == 0]['Y_pred']
-    ks_val = sp.stats.kstest(ks_samples_val_posi, ks_samples_val_nega)
-    ks_samples_test = pd.DataFrame({'Y': Y_test, 'Y_pred': Y_test_pred})
-    ks_samples_test_posi = ks_samples_test[ks_samples_test['Y'] == 1]['Y_pred']
-    ks_samples_test_nega = ks_samples_test[ks_samples_test['Y'] == 0]['Y_pred']
-    ks_test = sp.stats.kstest(ks_samples_test_posi, ks_samples_test_nega)
-
-    # F1-score, precision and recall
-    f1_train = round(metrics.f1_score(Y_train, Y_train_pred_round), 3)
-    f1_val = round(metrics.f1_score(Y_val, Y_val_pred_round), 3)
-    f1_test = round(metrics.f1_score(Y_test, Y_test_pred_round), 3)
-    pr_train = round(metrics.precision_score(Y_train, Y_train_pred_round), 3)
-    pr_val = round(metrics.precision_score(Y_val, Y_val_pred_round), 3)
-    pr_test = round(metrics.precision_score(Y_test, Y_test_pred_round), 3)
-    rec_train = round(metrics.recall_score(Y_train, Y_train_pred_round), 3)
-    rec_val = round(metrics.recall_score(Y_val, Y_val_pred_round), 3)
-    rec_test = round(metrics.recall_score(Y_test, Y_test_pred_round), 3)
+    # Print main scores if needed
     if silent == False:
-        print(f'''Train AUC score: {auc_train}, Train KS-test p-value: {round(ks_train.pvalue, 3)}, 
-              Train F1-score: {f1_train}, Train precision: {pr_train}, Train recall: {rec_train}''')
-        print(f'''Validation AUC score: {auc_test}, Validation KS-test p-value: {round(ks_test.pvalue, 3)}, 
-              Validation F1-score: {f1_test}, Validation precision: {pr_test}, Validation recall: {rec_test}''')
-        print(f'''Test AUC score: {auc_test}, Test KS-test p-value: {round(ks_test.pvalue, 3)}, 
-              Test F1-score: {f1_test}, Test precision: {pr_test}, Test recall: {rec_test}''')
+        print(f'''Train AUC score: {aucs[0]}, Train KS-test p-value: {round(kss[0], 3)}, 
+              Train F1-score: {f1s[0]}, Train precision: {prs[0]}, Train recall: {recs[0]}''')
+        print(f'''Validation AUC score: {aucs[1]}, Validation KS-test p-value: {round(kss[1], 3)}, 
+              Validation F1-score: {f1s[1]}, Validation precision: {prs[1]}, Validation recall: {recs[1]}''')
+        print(f'''Test AUC score: {aucs[2]}, Test KS-test p-value: {round(kss[2], 3)}, 
+              Test F1-score: {f1s[2]}, Test precision: {prs[2]}, Test recall: {recs[2]}''')
         if type in ['Logit', 'Probit']:
             print(results.summary())
 
-    return results, [auc_train, auc_val, auc_test],\
-           [round(ks_train.pvalue, 9), round(ks_val.pvalue, 9), round(ks_test.pvalue, 9)],\
-           [f1_train, f1_val, f1_test], [pr_train, pr_val, pr_test],\
-           [rec_train, rec_val, rec_test]
-
+    return results, aucs, kss, f1s, prs, recs
 
 #---------------------------------------------------------------------------------------
 def split_train_val_test(X,
@@ -1650,6 +1700,11 @@ def optuna_and_boosting(data:pd.DataFrame,
 
         # Split the data into train, validation and test
         X_train, X_val, X_test, Y_train, Y_val, Y_test = split_train_val_test(X, Y, state = random_state)
+        train_size = len(X_train)
+        val_size = len(X_val)
+        test_size = len(X_test)
+        dataset = {'X_train': X_train, 'X_val': X_val, 'X_test': X_test,
+                   'Y_train': Y_train, 'Y_val': Y_val, 'Y_test': Y_test}
 
         # Fixed hyperparams for the models
         param_lgb = {
@@ -1700,13 +1755,11 @@ def optuna_and_boosting(data:pd.DataFrame,
         }
 
         # Create folder to store model data for specific horizon
-        Path.mkdir(Path(f'{directory}/Models/{horizon}'), parents = True, exist_ok = True)
+        for model in ['LightGBM', 'XGBoost', 'CatBoost']:
+            model_dir = Path(f'{directory}/Models/{model}/{horizon}')
+            model_dir.mkdir(parents = True, exist_ok = True)
 
-        dirs = {
-            'lgb': f'{directory}/Models/{horizon}/lgb.txt',
-            'xgb': f'{directory}/Models/{horizon}/xgb.json',
-            'cat': f'{directory}/Models/{horizon}/cat'
-        }
+        #---------------------------------------------------------------------------------------------------------------------------------------
 
         def objective_lgb(trial):
 
@@ -1812,22 +1865,130 @@ def optuna_and_boosting(data:pd.DataFrame,
 
             sampler = optuna.samplers.TPESampler(seed = random_state)
             study = optuna.create_study(direction = "maximize", sampler = sampler)
-            study.optimize(objectives[model], n_trials = 5, n_jobs = 1, gc_after_trial = True, show_progress_bar = True)
+            study.optimize(objectives[model], n_trials = 3, n_jobs = 1, gc_after_trial = True, show_progress_bar = True)
             trial = study.best_trial
 
             return trial
         
+        #---------------------------------------------------------------------------------------------------------------------------------------
+
+        def train_predict_and_score(type:str,
+                                    params:dict,
+                                    train_params:dict,
+                                    dataset:dict,
+                                    directory:str,
+                                    horizon:int,
+                                    callbacks_lgb:dict = None,
+                                    shaps:bool = True):
+            """
+            Train gradient boosting model and estimate scores on the test set.
+            Additionally, save model in the specified directory and generate SHAP plot if needed.
+
+            Parameters
+            ----------
+            type : str
+                Type of the model - 'LightGBM', 'XGBoost', 'CatBoost'
+            params : dict
+                Dictionary of hyperparameters for the model
+            train_params : dict
+                Dictionary of hyperparameters for the training
+            dataset : list
+                Dictionary with the sets of X and Y for the model
+            directory : str
+                Base directory for the files
+            horizon : int
+                Horizon of the prediction
+            callbacks_lgb : dict = None
+                Callbacks for LightGBM
+            shaps : bool = True
+                Whether to calculate SHAP values and generate plot
+
+            Returns
+            -------
+            preds : list
+                List of predictions for the model
+            aucs : list
+                List of AUCs for the model
+            kss : list
+                List of Kolmogorov-Smirnov statistics for the model
+            f1s : list
+                List of F1 scores for the model
+            prs : list
+                List of precision-recall AUCs for the model
+            recs : list
+                List of recall scores for the model
+            shaps : bool
+                Calculated SHAP values
+            """
+
+            # Initiate base directory for the files and formats to save models in
+            dir = f'{directory}/Models/{type}/{horizon}'
+            model_format = {
+                'LightGBM': 'lgb.txt',
+                'XGBoost': 'xgb.json',
+                'CatBoost': 'cat'
+            }
+
+            # Train model
+            if type == 'LightGBM':
+                dtrain = lgb.Dataset(dataset['X_train'], label = dataset['Y_train'])
+                dvalid = lgb.Dataset(dataset['X_val'], label = dataset['Y_val'])
+                gbm = lgb.train(params, dtrain, valid_sets = dvalid, callbacks = callbacks_lgb, **train_params)
+            elif type == 'XGBoost':
+                dtrain = xgb.DMatrix(dataset['X_train'], label = dataset['Y_train'])
+                dvalid = xgb.DMatrix(dataset['X_val'], label = dataset['Y_val'])
+                gbm = xgb.train(params, dtrain, evals = [(dtrain, 'train') , (dvalid, 'valid')], **train_params)
+            elif type == 'CatBoost':
+                pass
+            else:
+                raise NameError('Wrong gradient boosting model')
+
+            # Save model
+            gbm.save_model(f'{dir}/{model_format[type]}')
+            
+            # Estimate scores for the model
+            preds, aucs, kss, f1s, prs, recs = get_preds_and_stats('GB', dataset, gbm, None, proba = False)
+
+            # Calculate SHAP values if needed
+            if shaps == True:
+                explainer = shap.Explainer(gbm.predict, X_train)
+                shap_values = explainer(X_val)
+                shap.plots.beeswarm(shap_values, show = False, color_bar = False)
+                plt.savefig(f'{dir}/shap.png', bbox_inches = 'tight', dpi = 750)
+            else:
+                shap_values = None
+
+            return preds, aucs, kss, f1s, prs, recs, shaps
+
+        #---------------------------------------------------------------------------------------------------------------------------------------
+
+        # Initiate dataframe for metrics storage
+        stats = pd.DataFrame(columns = ['Type', 'Horizon', 'Train size', 'Validation size', 'Test size',
+                                        'Train AUC', 'Validation AUC', 'Test AUC',
+                                        'Train KS-test p-value', 'Validation KS-test p-value', 'Test KS-test p-value',
+                                        'Train F1-score', 'Validation F1-score', 'Test F1-score', 
+                                        'Train precision', 'Validation precision', 'Test precision', 
+                                        'Train recall', 'Validation recall', 'Test recall'])
+
         # Find optimal hyperparams for LightGBM with Optuna
         print(f'\n LightGBM, {horizon} horizon:')
         trial_lgb = optuna_study('lgb')
         trial_lgb.params.update(param_lgb)
 
+        # Train optimal model for LightGBM
+        preds, aucs, kss, f1s, prs, recs, shaps = train_predict_and_score('LightGBM', trial_lgb.params, train_param_lgb,
+                                                                   dataset, directory, horizon, callbacks_lgb)
+        stats.loc[len(stats)] = ['LightGBM', horizon, train_size, val_size, test_size,
+                                 *aucs, *kss, *f1s, *prs, *recs]
+
         # Find optimal hyperparams for XGBoost with Optuna
-        print(f'\n XGBoost, {horizon} horizon:')
-        trial_xgb = optuna_study('xgb')
-        trial_xgb.params.update(param_xgb)
+        # print(f'\n XGBoost, {horizon} horizon:')
+        # trial_xgb = optuna_study('xgb')
+        # trial_xgb.params.update(param_xgb)
 
         # Find optimal hyperparams for CatBoost with Optuna
-        print(f'\n CatBoost, {horizon} horizon:')
-        trial_cat = optuna_study('cat')
-        trial_cat.params.update(param_cat)
+        # print(f'\n CatBoost, {horizon} horizon:')
+        # trial_cat = optuna_study('cat')
+        # trial_cat.params.update(param_cat)
+
+        return stats
