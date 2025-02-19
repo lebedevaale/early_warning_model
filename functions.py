@@ -1691,6 +1691,15 @@ def optuna_and_boosting(data:pd.DataFrame,
     Predictions and target values for validation and testing
     """
 
+    # Initiate dataframe for metrics storage
+    stats = pd.DataFrame(columns = ['Type', 'Horizon', 'Train size', 'Validation size', 'Test size',
+                                    'Train AUC', 'Validation AUC', 'Test AUC',
+                                    'Train KS-test p-value', 'Validation KS-test p-value', 'Test KS-test p-value',
+                                    'Train F1-score', 'Validation F1-score', 'Test F1-score', 
+                                    'Train precision', 'Validation precision', 'Test precision', 
+                                    'Train recall', 'Validation recall', 'Test recall'])
+
+    # Iterate over the available horizons 
     for horizon in horizons:
 
         # Get data
@@ -1756,7 +1765,7 @@ def optuna_and_boosting(data:pd.DataFrame,
 
         # Create folder to store model data for specific horizon
         for model in ['LightGBM', 'XGBoost', 'CatBoost']:
-            model_dir = Path(f'{directory}/Models/{model}/{horizon}')
+            model_dir = Path(f'{directory}Models/{model}/{horizon}')
             model_dir.mkdir(parents = True, exist_ok = True)
 
         #---------------------------------------------------------------------------------------------------------------------------------------
@@ -1922,7 +1931,7 @@ def optuna_and_boosting(data:pd.DataFrame,
             """
 
             # Initiate base directory for the files and formats to save models in
-            dir = f'{directory}/Models/{type}/{horizon}'
+            dir = f'{directory}Models/{type}/{horizon}'
             model_format = {
                 'LightGBM': 'lgb.txt',
                 'XGBoost': 'xgb.json',
@@ -1961,14 +1970,6 @@ def optuna_and_boosting(data:pd.DataFrame,
             return preds, aucs, kss, f1s, prs, recs, shaps
 
         #---------------------------------------------------------------------------------------------------------------------------------------
-
-        # Initiate dataframe for metrics storage
-        stats = pd.DataFrame(columns = ['Type', 'Horizon', 'Train size', 'Validation size', 'Test size',
-                                        'Train AUC', 'Validation AUC', 'Test AUC',
-                                        'Train KS-test p-value', 'Validation KS-test p-value', 'Test KS-test p-value',
-                                        'Train F1-score', 'Validation F1-score', 'Test F1-score', 
-                                        'Train precision', 'Validation precision', 'Test precision', 
-                                        'Train recall', 'Validation recall', 'Test recall'])
 
         # Find optimal hyperparams for LightGBM with Optuna
         print(f'\n LightGBM, {horizon} horizon:')
