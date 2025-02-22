@@ -13,9 +13,10 @@ from plotly.subplots import make_subplots
 
 # Libraries for metrics'calculation
 import shap
-from PyEMD import EMD
+from PyEMD import EMD # pip install EMD-signal
 import nolds
-import pymultifracs.mfa as mfa
+import pymultifracs.mf_analysis as mfa # pip install git+https://github.com/neurospin/pymultifracs
+import pymultifracs.wavelet as wavelet
 from pymultifracs.utils import build_q_log
 import scipy as sp
 from scipy.fft import fft
@@ -219,7 +220,7 @@ def get_preds_and_stats(type:str,
     Inputs:
     ----------
     type : str
-        Model type - 'Logit', 'Probit', 'RF', 'SVM' or 'GB'
+        Model type - 'Logit', 'Probit', 'RF', 'SVM', 'LightGBM', 'XGBoost', 'CatBoost'
     dataset : dict
         Dictionary with the sets of X and Y for the model
     model : model
@@ -253,9 +254,14 @@ def get_preds_and_stats(type:str,
         Y_val_pred = model.predict_proba(dataset['X_val'])[:, 1]
         Y_test_pred = model.predict_proba(dataset['X_test'])[:, 1]
     else:
-        Y_train_pred = model.predict(dataset['X_train'])
-        Y_val_pred = model.predict(dataset['X_val'])
-        Y_test_pred = model.predict(dataset['X_test'])
+        if type != 'XGBoost': 
+            Y_train_pred = model.predict(dataset['X_train'])
+            Y_val_pred = model.predict(dataset['X_val'])
+            Y_test_pred = model.predict(dataset['X_test'])
+        else:
+            Y_train_pred = model.predict(xgb.DMatrix(dataset['X_train']))
+            Y_val_pred = model.predict(xgb.DMatrix(dataset['X_val']))
+            Y_test_pred = model.predict(xgb.DMatrix(dataset['X_test']))
     auc_train, threshold_train = roc_metric(dataset['Y_train'], Y_train_pred)
     auc_val, threshold_val = roc_metric(dataset['Y_val'], Y_val_pred)
     auc_test, threshold_test = roc_metric(dataset['Y_test'], Y_test_pred)
@@ -586,8 +592,9 @@ def model(data,
                                                      test_size = min(share_1_orig * (1 - share) / share, 1), random_state = state)
             share_1 = len(Y_1) / (len(Y_0) + len(Y_1))
             Y = pd.concat([Y_0, Y_1])
+            X = pd.concat([X_0, X_1])
             if model in ['Logit', 'Probit']:
-                X = sm.add_constant(pd.concat([X_0, X_1]))
+                X = sm.add_constant(X)
         else:
             share_1 = None
 
@@ -1463,6 +1470,93 @@ def find_transitions(data_final:pd.DataFrame,
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
+def mf_analysis_full(signal, scaling_ranges, normalization=1,
+                     weighted=None, wt_name='db3', q=None,
+                     n_cumul=3, bootstrap_weighted=None,
+                     estimates='scm', R=1):
+    """Perform multifractal analysis on a signal.
+
+    .. note:: This function combines wavelet analysis and multifractal analysis
+              for practicality.
+              The use of parameters is better described in their
+              respective functions
+    Source: earlier versions of the pymultifracs package
+
+    Parameters
+    ----------
+    signal : ndarray, shape (n_samples,)
+        The signal to perform the analysis on.
+    j2 : int
+        Maximum scale to perform fit on.
+    normalization : int
+        Norm to use, by default 1.
+    weighted : str | None
+        Whether to perform a weighted linear regression, by default None.
+    wt_name : str, optional
+        Name of the wavelet to use, following pywavelet convention,
+        by default Daubechies with 3 vanishing moments.
+    q : list (float)
+        List of values of q to perform estimates on.
+    n_cumul : int, optional
+        [description], by default 3
+    bootstrap_weighted : str | None
+        Whether the boostrapped mrqs will have weighted regressions.
+        See the description of ``weighted``.
+    estimates : str
+        String containing characters which dictate which quantities to
+        estimate.
+        The following characters are available:
+            - ``'c'``: cumulants
+            - ``'m'``: multifractal spectrum
+            - ``'s'``: structure function
+
+        For example, ``"cms"`` would indicate that all should be computed,
+        whereas ``"c"`` results in only the cumulants being computed.
+
+        Defaults to ``"auto"`` which determines which quantities to estimate
+        based on the ``q`` argument passed: If ``len(q) >= 2`` , then the
+        spectrum is estimated, otherwise only the cumulants and structure
+        functions are computed.
+    R : int
+        Number of bootstrapped repetitions.
+
+    Returns
+    -------
+    MFractalData
+        The output of the multifractal analysis
+
+    See also
+    --------
+    mf_analysis
+    :obj:`~pymultifracs.wavelet.wavelet_analysis`
+    """
+
+    j2 = max([sr[1] for sr in scaling_ranges])
+
+    wt_transform = wavelet.wavelet_analysis(signal, wt_name=wt_name,
+                                            j2=j2,
+                                            normalization=normalization)
+
+    mrq = wt_transform.wt_coefs
+
+    if wt_transform.wt_leaders is not None:
+        mrq = [mrq, wt_transform.wt_leaders]
+
+    mf_data = mfa.mfa(
+        mrq,
+        scaling_ranges,
+        weighted=weighted,
+        n_cumul=n_cumul,
+        q=q,
+        bootstrap_weighted=bootstrap_weighted,
+        R=R,
+        estimates=estimates,
+    )
+
+    return mf_data
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+
 def get_metrics(data:pd.DataFrame,
                 active_tickers:list,
                 ma:float,
@@ -1571,20 +1665,16 @@ def get_metrics(data:pd.DataFrame,
                     # Set of the available scaling ranges heavily depends on the size of the dataset
                     # So, we are checking better scaling range and then downsizing if it raises error
                     try:
-                        dwt, lwt = mfa.mf_analysis_full(data_before_j['Volume'].values,
+                        dwt, lwt = mf_analysis_full(data_before_j['Volume'].values,
                             scaling_ranges = [(2, 5)],
                             q = build_q_log(1, 10, 20),
-                            n_cumul = 3,
-                            p_exp = np.inf,
-                            gamint = 0.0
+                            n_cumul = 3
                         )
                     except:
-                        dwt, lwt = mfa.mf_analysis_full(data_before_j['Volume'].values,
+                        dwt, lwt = mf_analysis_full(data_before_j['Volume'].values,
                             scaling_ranges = [(2, 4)],
                             q = build_q_log(1, 10, 20),
-                            n_cumul = 3,
-                            p_exp = np.inf,
-                            gamint = 0.0
+                            n_cumul = 3
                         )
                     _, lwt_cumul, _, _ = lwt
                     wl_c1.append(lwt_cumul.log_cumulants[0][0][0])
@@ -1659,7 +1749,8 @@ def generate_features(data:pd.DataFrame,
 
 def optuna_and_boosting(data:pd.DataFrame,
                         horizons:list[int], 
-                        random_state:int, 
+                        random_state:int,
+                        target_share_of_1:float = None,
                         directory:str = '',
                         shaps:bool = True):
     
@@ -1674,6 +1765,8 @@ def optuna_and_boosting(data:pd.DataFrame,
         List of possible horizons
     random_state : int
         Seed for the RNG
+    target_share_of_1 : float = None
+        Target share of 1 in the training dataset
     directory : str = ''
         Directory where data is stored if it isn't CWD
     shaps : bool = True
@@ -1693,6 +1786,7 @@ def optuna_and_boosting(data:pd.DataFrame,
 
     # Initiate dataframe for metrics storage
     stats = pd.DataFrame(columns = ['Type', 'Horizon', 'Train size', 'Validation size', 'Test size',
+                                    'Original share of 1', 'Share of 1', 'Target share of 1',
                                     'Train AUC', 'Validation AUC', 'Test AUC',
                                     'Train KS-test p-value', 'Validation KS-test p-value', 'Test KS-test p-value',
                                     'Train F1-score', 'Validation F1-score', 'Test F1-score', 
@@ -1706,9 +1800,30 @@ def optuna_and_boosting(data:pd.DataFrame,
         data['Flag'] = data['Distance'].apply(lambda x: 0 if x > horizon else 1)
         X = data.drop(['Volume', 'MA100', 'MV100', 'Rise', 'Distance', 'Index', 'Ticker', 'Flag'], axis = 1)
         Y = data['Flag']
+        original_share_of_1 = Y.sum() / len(Y)
+
+        # Balance the negative and positive samples if needed
+        if target_share_of_1 != None:
+            if target_share_of_1 > original_share_of_1:
+                data = pd.concat([X, Y], axis = 1)
+                data_0 = data[data['Flag'] == 0]
+                data_1 = data[data['Flag'] == 1]
+                X_0 = data_0.drop(columns = ['Flag'])
+                Y_0 = data_0['Flag']
+                X_1 = data_1.drop(columns = ['Flag'])
+                Y_1 = data_1['Flag']
+            
+                # Drop part of the negative samples to balance sample
+                _, X_0, _, Y_0 = modsel.train_test_split(X_0, Y_0,
+                                                         test_size = min(original_share_of_1 * (1 - target_share_of_1) / target_share_of_1, 1),
+                                                         random_state = random_state)
+                X = pd.concat([X_0, X_1])
+                Y = pd.concat([Y_0, Y_1])
 
         # Split the data into train, validation and test
         X_train, X_val, X_test, Y_train, Y_val, Y_test = split_train_val_test(X, Y, state = random_state)
+        share_of_1 = Y_train.sum() / len(Y_train)
+
         train_size = len(X_train)
         val_size = len(X_val)
         test_size = len(X_test)
@@ -1755,12 +1870,12 @@ def optuna_and_boosting(data:pd.DataFrame,
         train_param_xgb = {
             "num_boost_round": 500,
             "early_stopping_rounds": 100,
-            "verbose_eval": 100
+            "verbose_eval": False
         }
 
         train_param_cat = {
             'early_stopping_rounds': 100,
-            'verbose_eval': 100
+            'verbose_eval': False
         }
 
         # Create folder to store model data for specific horizon
@@ -1857,7 +1972,7 @@ def optuna_and_boosting(data:pd.DataFrame,
 
             gbm = CatBoostClassifier(**param)
             gbm.fit(X_train, Y_train, eval_set = [(X_val, Y_val)], **train_param)
-            Y_val_pred = gbm.predict(X_val)
+            Y_val_pred = gbm.predict_proba(X_val)[:, 1]
             auc, _ = roc_metric(Y_val, Y_val_pred)
 
             return auc
@@ -1943,12 +2058,16 @@ def optuna_and_boosting(data:pd.DataFrame,
                 dtrain = lgb.Dataset(dataset['X_train'], label = dataset['Y_train'])
                 dvalid = lgb.Dataset(dataset['X_val'], label = dataset['Y_val'])
                 gbm = lgb.train(params, dtrain, valid_sets = dvalid, callbacks = callbacks_lgb, **train_params)
+                proba = False
             elif type == 'XGBoost':
                 dtrain = xgb.DMatrix(dataset['X_train'], label = dataset['Y_train'])
                 dvalid = xgb.DMatrix(dataset['X_val'], label = dataset['Y_val'])
                 gbm = xgb.train(params, dtrain, evals = [(dtrain, 'train') , (dvalid, 'valid')], **train_params)
+                proba = False
             elif type == 'CatBoost':
-                pass
+                gbm = CatBoostClassifier(**params)
+                gbm.fit(X_train, Y_train, eval_set = [(X_val, Y_val)], **train_params)
+                proba = True
             else:
                 raise NameError('Wrong gradient boosting model')
 
@@ -1956,7 +2075,7 @@ def optuna_and_boosting(data:pd.DataFrame,
             gbm.save_model(f'{dir}/{model_format[type]}')
             
             # Estimate scores for the model
-            preds, aucs, kss, f1s, prs, recs = get_preds_and_stats('GB', dataset, gbm, None, proba = False)
+            preds, aucs, kss, f1s, prs, recs = get_preds_and_stats(type, dataset, gbm, None, proba = proba)
 
             # Calculate SHAP values if needed
             if shaps == True:
@@ -1978,18 +2097,36 @@ def optuna_and_boosting(data:pd.DataFrame,
 
         # Train optimal model for LightGBM
         preds, aucs, kss, f1s, prs, recs, shaps = train_predict_and_score('LightGBM', trial_lgb.params, train_param_lgb,
-                                                                   dataset, directory, horizon, callbacks_lgb)
-        stats.loc[len(stats)] = ['LightGBM', horizon, train_size, val_size, test_size,
+                                                                          dataset, directory, horizon, callbacks_lgb, shaps = False)
+        stats.loc[len(stats)] = ['LightGBM', horizon, train_size, val_size, test_size, 
+                                 original_share_of_1, share_of_1, target_share_of_1,
                                  *aucs, *kss, *f1s, *prs, *recs]
 
         # Find optimal hyperparams for XGBoost with Optuna
-        # print(f'\n XGBoost, {horizon} horizon:')
-        # trial_xgb = optuna_study('xgb')
-        # trial_xgb.params.update(param_xgb)
+        print(f'\n XGBoost, {horizon} horizon:')
+        trial_xgb = optuna_study('xgb')
+        trial_xgb.params.update(param_xgb)
+
+        # Train optimal model for XGBoost
+        preds, aucs, kss, f1s, prs, recs, shaps = train_predict_and_score('XGBoost', trial_xgb.params, train_param_xgb,
+                                                                          dataset, directory, horizon, shaps = False)
+        stats.loc[len(stats)] = ['XGBoost', horizon, train_size, val_size, test_size, 
+                                 original_share_of_1, share_of_1, target_share_of_1,
+                                 *aucs, *kss, *f1s, *prs, *recs]
 
         # Find optimal hyperparams for CatBoost with Optuna
-        # print(f'\n CatBoost, {horizon} horizon:')
-        # trial_cat = optuna_study('cat')
-        # trial_cat.params.update(param_cat)
+        print(f'\n CatBoost, {horizon} horizon:')
+        trial_cat = optuna_study('cat')
+        trial_cat.params.update(param_cat)
 
-        return stats
+        # Train optimal model for CatBoost
+        preds, aucs, kss, f1s, prs, recs, shaps = train_predict_and_score('CatBoost', trial_cat.params, train_param_cat,
+                                                                          dataset, directory, horizon, shaps = False)
+        stats.loc[len(stats)] = ['CatBoost', horizon, train_size, val_size, test_size, 
+                                 original_share_of_1, share_of_1, target_share_of_1,
+                                 *aucs, *kss, *f1s, *prs, *recs]
+
+    # Sort stats
+    stats = stats.sort_values(by = ['Type', 'Horizon']).reset_index(drop = True)
+
+    return stats
