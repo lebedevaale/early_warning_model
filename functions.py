@@ -220,7 +220,7 @@ def get_preds_and_stats(type:str,
     Inputs:
     ----------
     type : str
-        Model type - 'Logit', 'Probit', 'RF', 'SVM', 'LightGBM', 'XGBoost', 'CatBoost'
+        Model type - 'Logit', 'Probit', 'RF', 'SVM', 'LightGBM', 'XGBoost', 'CatBoost' or 'OLS'
     dataset : dict
         Dictionary with the sets of X and Y for the model
     model : model
@@ -245,10 +245,10 @@ def get_preds_and_stats(type:str,
     """
 
     # Predictions and AUCs
-    if type in ['Logit', 'Probit']:
-        Y_train_pred = results.predict(dataset['X_train'])
-        Y_val_pred = results.predict(dataset['X_val'])
-        Y_test_pred = results.predict(dataset['X_test'])
+    if type in ['Logit', 'Probit', 'OLS']:
+        Y_train_pred = [max(min(i, 1), 0) for i in results.predict(dataset['X_train'])]
+        Y_val_pred = [max(min(i, 1), 0) for i in results.predict(dataset['X_val'])]
+        Y_test_pred = [max(min(i, 1), 0) for i in results.predict(dataset['X_test'])]
     elif proba == True:
         Y_train_pred = model.predict_proba(dataset['X_train'])[:, 1]
         Y_val_pred = model.predict_proba(dataset['X_val'])[:, 1]
@@ -1747,6 +1747,56 @@ def generate_features(data:pd.DataFrame,
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
+def OLS_optimization(Y_val, 
+                     X_val, 
+                     Y_test, 
+                     X_test,
+                     p_value_bord:float = 0.05, 
+                     silent_results:bool = False):
+    
+    """
+    Function for the optimization of OLS
+
+    Inputs:
+    ----------
+    Y_val, Y_test : array
+        Target variable for the regression
+    X_val, X_test : DataFrame
+        Set of X for the model
+    p_value_bord : float = 0.05
+        Maximum acceptable p-value for the coefficient
+    silent_results : bool = False
+        Whether to print whole stats of the regression
+
+    Returns:
+    ----------
+    results : model
+        Fitted statsmodels model
+    """
+    
+    # Iterate while model has insignificant features
+    insignificant_feature = True
+    while insignificant_feature:
+        model = sm.OLS(Y_val, X_val)
+        results = model.fit()
+        significant = [p_value < p_value_bord for p_value in results.pvalues]
+        if all(significant):
+            insignificant_feature = False
+        else:
+            # If there's only one insignificant variable left
+            if X_val.shape[1] == 1:  
+                print('No significant features found')
+                results = None
+                insignificant_feature = False
+            else:
+                X_val, X_test = remove_most_insignificant(X_val, X_test, results)
+    if silent_results == False:
+        print(results.summary())
+
+    return results
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+
 def optuna_and_boosting(data:pd.DataFrame,
                         horizons:list[int], 
                         random_state:int,
@@ -1792,6 +1842,9 @@ def optuna_and_boosting(data:pd.DataFrame,
                                     'Train F1-score', 'Validation F1-score', 'Test F1-score', 
                                     'Train precision', 'Validation precision', 'Test precision', 
                                     'Train recall', 'Validation recall', 'Test recall'])
+
+    # Initiate dataframe for SHAP values
+    shap_summaries = pd.DataFrame()
 
     # Iterate over the available horizons 
     for horizon in horizons:
@@ -1879,7 +1932,7 @@ def optuna_and_boosting(data:pd.DataFrame,
         }
 
         # Create folder to store model data for specific horizon
-        for model in ['LightGBM', 'XGBoost', 'CatBoost']:
+        for model in ['LightGBM', 'XGBoost', 'CatBoost', '_Ensemble']:
             model_dir = Path(f'{directory}Models/{model}/{horizon}')
             model_dir.mkdir(parents = True, exist_ok = True)
 
@@ -2079,16 +2132,26 @@ def optuna_and_boosting(data:pd.DataFrame,
 
             # Calculate SHAP values if needed
             if shaps == True:
-                explainer = shap.Explainer(gbm.predict, X_train)
+                if type == 'CatBoost':
+                    explainer = shap.Explainer(gbm.predict, X_train)
+                else:
+                    explainer = shap.Explainer(gbm, X_train)
                 shap_values = explainer(X_val)
                 shap.plots.beeswarm(shap_values, show = False, color_bar = False)
                 plt.savefig(f'{dir}/shap.png', bbox_inches = 'tight', dpi = 750)
+                plt.close()
+                shap.plots.bar(shap_values, show = False)
+                plt.savefig(f'{dir}/shap_abs.png', bbox_inches = 'tight', dpi = 750)
+                plt.close()
             else:
                 shap_values = None
 
-            return preds, aucs, kss, f1s, prs, recs, shaps
+            return preds, aucs, kss, f1s, prs, recs, shap_values
 
         #---------------------------------------------------------------------------------------------------------------------------------------
+
+        if shaps == True:
+            shap_summary = pd.DataFrame({'Feature': X.columns})
 
         # Find optimal hyperparams for LightGBM with Optuna
         print(f'\n LightGBM, {horizon} horizon:')
@@ -2096,11 +2159,13 @@ def optuna_and_boosting(data:pd.DataFrame,
         trial_lgb.params.update(param_lgb)
 
         # Train optimal model for LightGBM
-        preds, aucs, kss, f1s, prs, recs, shaps = train_predict_and_score('LightGBM', trial_lgb.params, train_param_lgb,
-                                                                          dataset, directory, horizon, callbacks_lgb, shaps = False)
+        preds_lgb, aucs, kss, f1s, prs, recs, shaps_lgb = train_predict_and_score('LightGBM', trial_lgb.params, train_param_lgb,
+                                                                                  dataset, directory, horizon, callbacks_lgb, shaps = shaps)
         stats.loc[len(stats)] = ['LightGBM', horizon, train_size, val_size, test_size, 
                                  original_share_of_1, share_of_1, target_share_of_1,
                                  *aucs, *kss, *f1s, *prs, *recs]
+        if shaps_lgb != None:   
+            shap_summary['Mean LightGBM |SHAP|'] = np.abs(shaps_lgb.values).mean(0)
 
         # Find optimal hyperparams for XGBoost with Optuna
         print(f'\n XGBoost, {horizon} horizon:')
@@ -2108,11 +2173,13 @@ def optuna_and_boosting(data:pd.DataFrame,
         trial_xgb.params.update(param_xgb)
 
         # Train optimal model for XGBoost
-        preds, aucs, kss, f1s, prs, recs, shaps = train_predict_and_score('XGBoost', trial_xgb.params, train_param_xgb,
-                                                                          dataset, directory, horizon, shaps = False)
+        preds_xgb, aucs, kss, f1s, prs, recs, shaps_xgb = train_predict_and_score('XGBoost', trial_xgb.params, train_param_xgb,
+                                                                                  dataset, directory, horizon, shaps = shaps)
         stats.loc[len(stats)] = ['XGBoost', horizon, train_size, val_size, test_size, 
                                  original_share_of_1, share_of_1, target_share_of_1,
                                  *aucs, *kss, *f1s, *prs, *recs]
+        if shaps_xgb != None:   
+            shap_summary['Mean XGBoost |SHAP|'] = np.abs(shaps_xgb.values).mean(0)
 
         # Find optimal hyperparams for CatBoost with Optuna
         print(f'\n CatBoost, {horizon} horizon:')
@@ -2120,13 +2187,61 @@ def optuna_and_boosting(data:pd.DataFrame,
         trial_cat.params.update(param_cat)
 
         # Train optimal model for CatBoost
-        preds, aucs, kss, f1s, prs, recs, shaps = train_predict_and_score('CatBoost', trial_cat.params, train_param_cat,
-                                                                          dataset, directory, horizon, shaps = False)
+        preds_cat, aucs, kss, f1s, prs, recs, shaps_cat = train_predict_and_score('CatBoost', trial_cat.params, train_param_cat,
+                                                                                  dataset, directory, horizon, shaps = shaps)
         stats.loc[len(stats)] = ['CatBoost', horizon, train_size, val_size, test_size, 
                                  original_share_of_1, share_of_1, target_share_of_1,
                                  *aucs, *kss, *f1s, *prs, *recs]
+        if shaps_cat != None:   
+            shap_summary['Mean CatBoost |SHAP|'] = np.abs(shaps_cat.values).mean(0)
 
-    # Sort stats
+
+        # Average predictions with OLS
+        print(f'\n OLS, {horizon} horizon:')
+        X_train_ensemble = pd.DataFrame({'LightGBM': preds_lgb[0], 'XGBoost': preds_xgb[0], 'CatBoost': preds_cat[0]})
+        X_val_ensemble = pd.DataFrame({'LightGBM': preds_lgb[1], 'XGBoost': preds_xgb[1], 'CatBoost': preds_cat[1]})
+        X_test_ensemble = pd.DataFrame({'LightGBM': preds_lgb[2], 'XGBoost': preds_xgb[2], 'CatBoost': preds_cat[2]})
+        results = OLS_optimization(Y_val.values, X_val_ensemble, 
+                                   Y_test.values, X_test_ensemble,
+                                   p_value_bord = 0.01,
+                                   silent_results = True)
+        print(results.summary())
+        
+        # Get predictions and stats for the ensemble
+        vars_ensemble = results.model.exog_names
+        dataset_ensemble = {'X_train': X_train_ensemble[vars_ensemble], 'X_val': X_val_ensemble[vars_ensemble], 'X_test': X_test_ensemble[vars_ensemble],
+                            'Y_train': Y_train.values, 'Y_val': Y_val.values, 'Y_test': Y_test.values}
+        preds, aucs, kss, f1s, prs, recs = get_preds_and_stats('OLS', dataset_ensemble, None, results, proba = False)
+        stats.loc[len(stats)] = ['_Ensemble', horizon, train_size, val_size, test_size, 
+                                 original_share_of_1, share_of_1, target_share_of_1,
+                                 *aucs, *kss, *f1s, *prs, *recs]
+        
+        # Save predictions for models and ensemble
+        X_train_ensemble['Y'], X_train_ensemble['Y_pred'], X_train_ensemble['Sample'] = Y_train.values, preds[0], 'Train'
+        X_val_ensemble['Y'], X_val_ensemble['Y_pred'], X_val_ensemble['Sample'] = Y_val.values, preds[1], 'Val'
+        X_test_ensemble['Y'], X_test_ensemble['Y_pred'], X_test_ensemble['Sample'] = Y_test.values, preds[2], 'Test'
+        pd.concat([X_train_ensemble, X_val_ensemble, X_test_ensemble]).to_parquet(f'{directory}Models/_Ensemble/{horizon}/predictions.parquet', index = False)
+
+        # Get mean SHAP values for the ensemble based on the normalized weights from the OLS
+        if shaps == True:
+            models = ['LightGBM', 'XGBoost', 'CatBoost']
+            ols_coefs = results.params.to_dict()
+            coefs = {col: ols_coefs.get(col, 0) for col in models}
+            for model in models:
+                shap_summary[f'{model}_coef'] = coefs[model]
+                shap_summary[f'{model}_coef_normalized'] = shap_summary[f'{model}_coef'] / sum(coefs.values())
+            shap_summary['Mean _Ensemble |SHAP|'] = shap_summary['Mean LightGBM |SHAP|'] * shap_summary['LightGBM_coef_normalized']\
+                                                + shap_summary['Mean XGBoost |SHAP|'] * shap_summary['XGBoost_coef_normalized']\
+                                                + shap_summary['Mean CatBoost |SHAP|'] * shap_summary['CatBoost_coef_normalized']
+            shap_summary['Horizon'] = horizon
+            shap_summaries = pd.concat([shap_summaries, shap_summary], ignore_index = True)
+
+    # Sort and save stats
     stats = stats.sort_values(by = ['Type', 'Horizon']).reset_index(drop = True)
+    stats.to_parquet(f'{directory}Models/_Ensemble/stats.parquet', index = False)
+
+    # Sort and save mean SHAP values for models and ensemble
+    shap_summaries = shap_summaries.sort_values(by = ['Horizon', 'Mean _Ensemble |SHAP|'], ascending = [True, False]).reset_index(drop = True)
+    shap_summaries.to_parquet(f'{directory}Models/_Ensemble/shaps.parquet', index = False)
 
     return stats
