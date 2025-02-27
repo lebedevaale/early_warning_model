@@ -27,6 +27,7 @@ optuna.logging.set_verbosity(optuna.logging.CRITICAL)
 import networkx as nx
 import lightgbm as lgb
 import xgboost as xgb
+# import catboost as cat
 from catboost import CatBoostClassifier
 import tensorflow as tf
 import statsmodels.api as sm
@@ -34,6 +35,7 @@ import sklearn.svm as svm
 import sklearn.model_selection as modsel
 import sklearn.ensemble as ens
 import sklearn.metrics as metrics
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.inspection import permutation_importance as pi
 from sklearn.feature_selection import mutual_info_regression
 
@@ -2121,6 +2123,10 @@ def optuna_and_boosting(data:pd.DataFrame,
                 gbm = CatBoostClassifier(**params)
                 gbm.fit(X_train, Y_train, eval_set = [(X_val, Y_val)], **train_params)
                 proba = True
+                # dtrain = cat.Pool(dataset['X_train'], label = dataset['Y_train'], group_id = [0] * len(dataset['X_train']))
+                # dvalid = cat.Pool(dataset['X_val'], label = dataset['Y_val'], group_id = [0] * len(dataset['X_val']))
+                # gbm = cat.train(dtrain = dtrain, params = params, eval_set = [(X_val, Y_val)], **train_params)
+                # proba = False
             else:
                 raise NameError('Wrong gradient boosting model')
 
@@ -2136,6 +2142,7 @@ def optuna_and_boosting(data:pd.DataFrame,
                     explainer = shap.Explainer(gbm.predict, X_train)
                 else:
                     explainer = shap.Explainer(gbm, X_train)
+                # explainer = shap.Explainer(gbm, X_train)
                 shap_values = explainer(X_val)
                 shap.plots.beeswarm(shap_values, show = False, color_bar = False)
                 plt.savefig(f'{dir}/shap.png', bbox_inches = 'tight', dpi = 750)
@@ -2165,7 +2172,7 @@ def optuna_and_boosting(data:pd.DataFrame,
                                  original_share_of_1, share_of_1, target_share_of_1,
                                  *aucs, *kss, *f1s, *prs, *recs]
         if shaps_lgb != None:   
-            shap_summary['Mean LightGBM |SHAP|'] = np.abs(shaps_lgb.values).mean(0)
+            shap_summary['LightGBM'] = np.abs(shaps_lgb.values).mean(0)
 
         # Find optimal hyperparams for XGBoost with Optuna
         print(f'\n XGBoost, {horizon} horizon:')
@@ -2179,7 +2186,7 @@ def optuna_and_boosting(data:pd.DataFrame,
                                  original_share_of_1, share_of_1, target_share_of_1,
                                  *aucs, *kss, *f1s, *prs, *recs]
         if shaps_xgb != None:   
-            shap_summary['Mean XGBoost |SHAP|'] = np.abs(shaps_xgb.values).mean(0)
+            shap_summary['XGBoost'] = np.abs(shaps_xgb.values).mean(0)
 
         # Find optimal hyperparams for CatBoost with Optuna
         print(f'\n CatBoost, {horizon} horizon:')
@@ -2193,7 +2200,7 @@ def optuna_and_boosting(data:pd.DataFrame,
                                  original_share_of_1, share_of_1, target_share_of_1,
                                  *aucs, *kss, *f1s, *prs, *recs]
         if shaps_cat != None:   
-            shap_summary['Mean CatBoost |SHAP|'] = np.abs(shaps_cat.values).mean(0)
+            shap_summary['CatBoost'] = np.abs(shaps_cat.values).mean(0)
 
 
         # Average predictions with OLS
@@ -2225,14 +2232,20 @@ def optuna_and_boosting(data:pd.DataFrame,
         # Get mean SHAP values for the ensemble based on the normalized weights from the OLS
         if shaps == True:
             models = ['LightGBM', 'XGBoost', 'CatBoost']
+            models_norm = [f'{model}_normalized' for model in models]
             ols_coefs = results.params.to_dict()
             coefs = {col: ols_coefs.get(col, 0) for col in models}
+            scaler = MinMaxScaler()
+            shap_summary[models_norm] = scaler.fit_transform(shap_summary[models].values)
             for model in models:
                 shap_summary[f'{model}_coef'] = coefs[model]
                 shap_summary[f'{model}_coef_normalized'] = shap_summary[f'{model}_coef'] / sum(coefs.values())
-            shap_summary['Mean _Ensemble |SHAP|'] = shap_summary['Mean LightGBM |SHAP|'] * shap_summary['LightGBM_coef_normalized']\
-                                                + shap_summary['Mean XGBoost |SHAP|'] * shap_summary['XGBoost_coef_normalized']\
-                                                + shap_summary['Mean CatBoost |SHAP|'] * shap_summary['CatBoost_coef_normalized']
+            shap_summary['_Ensemble'] = shap_summary['LightGBM_normalized'] * shap_summary['LightGBM_coef_normalized']\
+                                                  + shap_summary['XGBoost_normalized'] * shap_summary['XGBoost_coef_normalized']\
+                                                  + shap_summary['CatBoost_normalized'] * shap_summary['CatBoost_coef_normalized']
+            # shap_summary['_Ensemble'] = shap_summary['LightGBM_normalized'] * shap_summary['LightGBM_coef']\
+            #                                         + shap_summary['XGBoost_normalized'] * shap_summary['XGBoost_coef']\
+            #                                         + shap_summary['CatBoost_normalized'] * shap_summary['CatBoost_coef']
             shap_summary['Horizon'] = horizon
             shap_summaries = pd.concat([shap_summaries, shap_summary], ignore_index = True)
 
@@ -2241,7 +2254,7 @@ def optuna_and_boosting(data:pd.DataFrame,
     stats.to_parquet(f'{directory}Models/_Ensemble/stats.parquet', index = False)
 
     # Sort and save mean SHAP values for models and ensemble
-    shap_summaries = shap_summaries.sort_values(by = ['Horizon', 'Mean _Ensemble |SHAP|'], ascending = [True, False]).reset_index(drop = True)
+    shap_summaries = shap_summaries.sort_values(by = ['Horizon', '_Ensemble'], ascending = [True, False]).reset_index(drop = True)
     shap_summaries.to_parquet(f'{directory}Models/_Ensemble/shaps.parquet', index = False)
 
     return stats
