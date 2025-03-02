@@ -1802,6 +1802,7 @@ def OLS_optimization(Y_val,
 def optuna_and_boosting(data:pd.DataFrame,
                         horizons:list[int], 
                         random_state:int,
+                        n_trials:int = 5,
                         target_share_of_1:float = None,
                         directory:str = '',
                         shaps:bool = True):
@@ -1817,6 +1818,8 @@ def optuna_and_boosting(data:pd.DataFrame,
         List of possible horizons
     random_state : int
         Seed for the RNG
+    n_trials : int = 5
+        Number of trials for the optimization in Optuna
     target_share_of_1 : float = None
         Target share of 1 in the training dataset
     directory : str = ''
@@ -1850,7 +1853,7 @@ def optuna_and_boosting(data:pd.DataFrame,
 
     # Iterate over the available horizons 
     for horizon in horizons:
-
+        
         # Get data
         data['Flag'] = data['Distance'].apply(lambda x: 0 if x > horizon else 1)
         X = data.drop(['Volume', 'MA100', 'MV100', 'Rise', 'Distance', 'Index', 'Ticker', 'Flag'], axis = 1)
@@ -1860,9 +1863,9 @@ def optuna_and_boosting(data:pd.DataFrame,
         # Balance the negative and positive samples if needed
         if target_share_of_1 != None:
             if target_share_of_1 > original_share_of_1:
-                data = pd.concat([X, Y], axis = 1)
-                data_0 = data[data['Flag'] == 0]
-                data_1 = data[data['Flag'] == 1]
+                data_bal = pd.concat([X, Y], axis = 1)
+                data_0 = data_bal[data_bal['Flag'] == 0]
+                data_1 = data_bal[data_bal['Flag'] == 1]
                 X_0 = data_0.drop(columns = ['Flag'])
                 Y_0 = data_0['Flag']
                 X_1 = data_1.drop(columns = ['Flag'])
@@ -1935,7 +1938,7 @@ def optuna_and_boosting(data:pd.DataFrame,
 
         # Create folder to store model data for specific horizon
         for model in ['LightGBM', 'XGBoost', 'CatBoost', '_Ensemble']:
-            model_dir = Path(f'{directory}Models/{model}/{horizon}')
+            model_dir = Path(f'{directory}/{model}/{horizon}')
             model_dir.mkdir(parents = True, exist_ok = True)
 
         #---------------------------------------------------------------------------------------------------------------------------------------
@@ -2034,7 +2037,7 @@ def optuna_and_boosting(data:pd.DataFrame,
 
         #---------------------------------------------------------------------------------------------------------------------------------------
 
-        def optuna_study(model):
+        def optuna_study(model, n_trials:int = 5, random_state:int = 0):
 
             objectives = {
                 "lgb": objective_lgb,
@@ -2044,7 +2047,7 @@ def optuna_and_boosting(data:pd.DataFrame,
 
             sampler = optuna.samplers.TPESampler(seed = random_state)
             study = optuna.create_study(direction = "maximize", sampler = sampler)
-            study.optimize(objectives[model], n_trials = 3, n_jobs = 1, gc_after_trial = True, show_progress_bar = True)
+            study.optimize(objectives[model], n_trials = n_trials, n_jobs = 1, gc_after_trial = True, show_progress_bar = True)
             trial = study.best_trial
 
             return trial
@@ -2101,7 +2104,7 @@ def optuna_and_boosting(data:pd.DataFrame,
             """
 
             # Initiate base directory for the files and formats to save models in
-            dir = f'{directory}Models/{type}/{horizon}'
+            dir = f'{directory}/{type}/{horizon}'
             model_format = {
                 'LightGBM': 'lgb.txt',
                 'XGBoost': 'xgb.json',
@@ -2141,19 +2144,27 @@ def optuna_and_boosting(data:pd.DataFrame,
                 if type == 'CatBoost':
                     explainer = shap.Explainer(gbm.predict, X_train)
                 else:
-                    explainer = shap.Explainer(gbm, X_train)
-                # explainer = shap.Explainer(gbm, X_train)
-                shap_values = explainer(X_val)
-                shap.plots.beeswarm(shap_values, show = False, color_bar = False)
-                plt.savefig(f'{dir}/shap.png', bbox_inches = 'tight', dpi = 750)
-                plt.close()
-                shap.plots.bar(shap_values, show = False)
-                plt.savefig(f'{dir}/shap_abs.png', bbox_inches = 'tight', dpi = 750)
-                plt.close()
-            else:
-                shap_values = None
+                    explainer = shap.Explainer(gbm, np.array(X_train))
 
-            return preds, aucs, kss, f1s, prs, recs, shap_values
+                # SHAP cannot drop unused variables from the explainer by himself and manual filtartion of the features doesn't work either
+                # Moreover, from the shap_values method we cannot get data for the graphs as it throws an error
+                # So, if the model works ok, we can plot graphs. Otherwise we calculate SHAP values w/o checking additivity and without graphs 
+                try:
+                    shap_values = explainer(X_val)
+                    shap_values_values = shap_values.values
+                    shap.plots.beeswarm(shap_values, show = False, color_bar = False)
+                    plt.savefig(f'{dir}/shap.png', bbox_inches = 'tight', dpi = 750)
+                    plt.close()
+                    shap.plots.bar(shap_values, show = False)
+                    plt.savefig(f'{dir}/shap_abs.png', bbox_inches = 'tight', dpi = 750)
+                    plt.close()
+                except:
+                    print('No graphs would be generated')
+                    shap_values_values = explainer.shap_values(X_val, check_additivity = False)
+            else:
+                shap_values_values = [[None]]
+
+            return preds, aucs, kss, f1s, prs, recs, shap_values_values
 
         #---------------------------------------------------------------------------------------------------------------------------------------
 
@@ -2162,7 +2173,7 @@ def optuna_and_boosting(data:pd.DataFrame,
 
         # Find optimal hyperparams for LightGBM with Optuna
         print(f'\n LightGBM, {horizon} horizon:')
-        trial_lgb = optuna_study('lgb')
+        trial_lgb = optuna_study('lgb', n_trials = n_trials, random_state = random_state)
         trial_lgb.params.update(param_lgb)
 
         # Train optimal model for LightGBM
@@ -2171,12 +2182,12 @@ def optuna_and_boosting(data:pd.DataFrame,
         stats.loc[len(stats)] = ['LightGBM', horizon, train_size, val_size, test_size, 
                                  original_share_of_1, share_of_1, target_share_of_1,
                                  *aucs, *kss, *f1s, *prs, *recs]
-        if shaps_lgb != None:   
-            shap_summary['LightGBM'] = np.abs(shaps_lgb.values).mean(0)
+        if shaps_lgb[0][0] != None:   
+            shap_summary['LightGBM'] = np.abs(shaps_lgb).mean(0)
 
         # Find optimal hyperparams for XGBoost with Optuna
         print(f'\n XGBoost, {horizon} horizon:')
-        trial_xgb = optuna_study('xgb')
+        trial_xgb = optuna_study('xgb', n_trials = n_trials, random_state = random_state)
         trial_xgb.params.update(param_xgb)
 
         # Train optimal model for XGBoost
@@ -2185,12 +2196,12 @@ def optuna_and_boosting(data:pd.DataFrame,
         stats.loc[len(stats)] = ['XGBoost', horizon, train_size, val_size, test_size, 
                                  original_share_of_1, share_of_1, target_share_of_1,
                                  *aucs, *kss, *f1s, *prs, *recs]
-        if shaps_xgb != None:   
-            shap_summary['XGBoost'] = np.abs(shaps_xgb.values).mean(0)
+        if shaps_xgb[0][0] != None:   
+            shap_summary['XGBoost'] = np.abs(shaps_xgb).mean(0)
 
         # Find optimal hyperparams for CatBoost with Optuna
         print(f'\n CatBoost, {horizon} horizon:')
-        trial_cat = optuna_study('cat')
+        trial_cat = optuna_study('cat', n_trials = n_trials, random_state = random_state)
         trial_cat.params.update(param_cat)
 
         # Train optimal model for CatBoost
@@ -2199,9 +2210,8 @@ def optuna_and_boosting(data:pd.DataFrame,
         stats.loc[len(stats)] = ['CatBoost', horizon, train_size, val_size, test_size, 
                                  original_share_of_1, share_of_1, target_share_of_1,
                                  *aucs, *kss, *f1s, *prs, *recs]
-        if shaps_cat != None:   
-            shap_summary['CatBoost'] = np.abs(shaps_cat.values).mean(0)
-
+        if shaps_cat[0][0] != None:   
+            shap_summary['CatBoost'] = np.abs(shaps_cat).mean(0)
 
         # Average predictions with OLS
         print(f'\n OLS, {horizon} horizon:')
@@ -2227,7 +2237,7 @@ def optuna_and_boosting(data:pd.DataFrame,
         X_train_ensemble['Y'], X_train_ensemble['Y_pred'], X_train_ensemble['Sample'] = Y_train.values, preds[0], 'Train'
         X_val_ensemble['Y'], X_val_ensemble['Y_pred'], X_val_ensemble['Sample'] = Y_val.values, preds[1], 'Val'
         X_test_ensemble['Y'], X_test_ensemble['Y_pred'], X_test_ensemble['Sample'] = Y_test.values, preds[2], 'Test'
-        pd.concat([X_train_ensemble, X_val_ensemble, X_test_ensemble]).to_parquet(f'{directory}Models/_Ensemble/{horizon}/predictions.parquet', index = False)
+        pd.concat([X_train_ensemble, X_val_ensemble, X_test_ensemble]).to_parquet(f'{directory}/_Ensemble/{horizon}/predictions.parquet', index = False)
 
         # Get mean SHAP values for the ensemble based on the normalized weights from the OLS
         if shaps == True:
@@ -2235,6 +2245,8 @@ def optuna_and_boosting(data:pd.DataFrame,
             models_norm = [f'{model}_normalized' for model in models]
             ols_coefs = results.params.to_dict()
             coefs = {col: ols_coefs.get(col, 0) for col in models}
+            
+            # Rescale SHAP values to [0; 1], get normalized (for the sum of 1) model coefs and calculate the final SHAPs
             scaler = MinMaxScaler()
             shap_summary[models_norm] = scaler.fit_transform(shap_summary[models].values)
             for model in models:
@@ -2251,10 +2263,10 @@ def optuna_and_boosting(data:pd.DataFrame,
 
     # Sort and save stats
     stats = stats.sort_values(by = ['Type', 'Horizon']).reset_index(drop = True)
-    stats.to_parquet(f'{directory}Models/_Ensemble/stats.parquet', index = False)
+    stats.to_parquet(f'{directory}/_Ensemble/stats.parquet', index = False)
 
     # Sort and save mean SHAP values for models and ensemble
     shap_summaries = shap_summaries.sort_values(by = ['Horizon', '_Ensemble'], ascending = [True, False]).reset_index(drop = True)
-    shap_summaries.to_parquet(f'{directory}Models/_Ensemble/shaps.parquet', index = False)
+    shap_summaries.to_parquet(f'{directory}/_Ensemble/shaps.parquet', index = False)
 
     return stats
