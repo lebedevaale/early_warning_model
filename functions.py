@@ -2144,7 +2144,7 @@ def optuna_and_boosting(data:pd.DataFrame,
                 if type == 'CatBoost':
                     explainer = shap.Explainer(gbm.predict, X_train)
                 else:
-                    explainer = shap.Explainer(gbm, np.array(X_train))
+                    explainer = shap.Explainer(gbm, X_train)
 
                 # SHAP cannot drop unused variables from the explainer by himself and manual filtartion of the features doesn't work either
                 # Moreover, from the shap_values method we cannot get data for the graphs as it throws an error
