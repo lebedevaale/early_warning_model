@@ -29,7 +29,7 @@ import lightgbm as lgb
 import xgboost as xgb
 # import catboost as cat
 from catboost import CatBoostClassifier
-import tensorflow as tf
+# import tensorflow as tf
 import statsmodels.api as sm
 import sklearn.svm as svm
 import sklearn.model_selection as modsel
@@ -412,21 +412,21 @@ def model_optimization(Y_train,
                 # Get feature importance
                 results = model.get_feature_importance()
 
-        elif type == 'NN':
-            # Initiate the model with specific layers
-            model = tf.keras.models.Sequential([
-                tf.keras.layers.Dense(10, activation = 'relu', input_shape = (len(X_train.columns),)),
-                tf.keras.layers.Dense(1, activation = 'sigmoid')
-            ])
+        # elif type == 'NN':
+        #     # Initiate the model with specific layers
+        #     model = tf.keras.models.Sequential([
+        #         tf.keras.layers.Dense(10, activation = 'relu', input_shape = (len(X_train.columns),)),
+        #         tf.keras.layers.Dense(1, activation = 'sigmoid')
+        #     ])
 
-            model.compile(optimizer = 'adam',
-                loss = 'binary_crossentropy',
-                metrics = ['AUC'])
+        #     model.compile(optimizer = 'adam',
+        #         loss = 'binary_crossentropy',
+        #         metrics = ['AUC'])
             
-            model.fit(X_train, Y_train, epochs=5)
+        #     model.fit(X_train, Y_train, epochs=5)
 
-            # Get feature importance
-            results = None
+        #     # Get feature importance
+        #     results = None
         else:
             raise ValueError(f"Model type '{type}' is not supported.")
 
