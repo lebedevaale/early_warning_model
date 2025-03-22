@@ -1,0 +1,34 @@
+[project]
+name = "early warning model"
+version = "3.0"
+description = "Three iterations of the predictive model development for the search of the avalanche-like behaviour of the stock exchange on the example of the volume of trading in the financial hourly data provided by Yahoo Finance and on the solar data from the Ace satellite from the L1 Lagrange point provided by the NASA."
+authors = [
+    {name = "Lebedev Andrey",email = "lebedev.aale@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas (>=2.2.3,<3.0.0)",
+    "numpy (>=1.16.0)",
+    "obspy (>=1.4.1,<2.0.0)",
+    "cdasws (>=1.8.10,<2.0.0)",
+    "matplotlib (>=3.10.1,<4.0.0)",
+    "plotly (>=6.0.1,<7.0.0)",
+    "shap (>=0.47.0,<0.48.0)",
+    "pyemd (>=1.0.0,<2.0.0)",
+    "pymultifracs @ git+https://github.com/neurospin/pymultifracs",
+    "scipy (>=1.15.2,<2.0.0)",
+    "optuna (>=4.2.1,<5.0.0)",
+    "networkx (>=3.4.2,<4.0.0)",
+    "lightgbm (>=4.0.0)",
+    "xgboost (>=2.0.0)",
+    "catboost (>=1.2.7,<2.0.0)",
+    "statsmodels (>=0.14.4,<0.15.0)",
+    "sklearn (>=0.0.post12,<0.1)",
+    "yfinance (>=0.2.55,<0.3.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
