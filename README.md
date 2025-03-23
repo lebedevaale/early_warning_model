@@ -44,6 +44,7 @@ LightGBM, XGBoost and CatBoost models with Optuna hyperparameter optimization an
     - functions.py - main functions for the project
     - import_and_preparation.ipynb - data import and preparation (including metrics calculation) for all of the time series
     - modelling.ipynb - main notebook for the modelling that contains all base results
+    - pyproject.toml - poetry dependency list
 - folders
     - Data - original and prepared datasets for the modelling
     - Definition_simulations - data from the definition of the critical transition research
