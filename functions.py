@@ -43,7 +43,6 @@ np.random.seed(0)
 
 #---------------------------------------------------------------------------------------
 
-
 def variables_dynamics(data:pd.DataFrame,
                        groupby:str,
                        mean_only:bool = False,
@@ -1472,9 +1471,14 @@ def find_transitions(data_final:pd.DataFrame,
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
-def mf_analysis_full(signal, scaling_ranges, normalization=1,
-                     weighted=None, wt_name='db3', q=None,
-                     n_cumul=3, bootstrap_weighted=None,
+def mf_analysis_full(signal,
+                     scaling_ranges,
+                     normalization=1,
+                     weighted=None,
+                     wt_name='db3',
+                     q=None,
+                     n_cumul=3,
+                     bootstrap_weighted=None,
                      estimates='scm', R=1):
     """Perform multifractal analysis on a signal.
 
@@ -1482,7 +1486,7 @@ def mf_analysis_full(signal, scaling_ranges, normalization=1,
               for practicality.
               The use of parameters is better described in their
               respective functions
-    Source: earlier versions of the pymultifracs package
+    Source: earlier versions of the pymultifracs package, but optimized to be compatible with the current version of the library
 
     Parameters
     ----------
@@ -1535,25 +1539,27 @@ def mf_analysis_full(signal, scaling_ranges, normalization=1,
 
     j2 = max([sr[1] for sr in scaling_ranges])
 
-    wt_transform = wavelet.wavelet_analysis(signal, wt_name=wt_name,
-                                            j2=j2,
-                                            normalization=normalization)
-
-    mrq = wt_transform.wt_coefs
-
-    if wt_transform.wt_leaders is not None:
-        mrq = [mrq, wt_transform.wt_leaders]
-
-    mf_data = mfa.mfa(
-        mrq,
-        scaling_ranges,
-        weighted=weighted,
-        n_cumul=n_cumul,
-        q=q,
-        bootstrap_weighted=bootstrap_weighted,
-        R=R,
-        estimates=estimates,
-    )
+    mrq = wavelet.wavelet_analysis(signal,
+                                   wt_name = wt_name,
+                                   j2 = j2,
+                                   normalization = normalization)
+    for i, sr in enumerate(scaling_ranges):
+        try:
+            mf_data = mfa.mfa(
+                mrq,
+                sr,
+                weighted = weighted,
+                n_cumul = n_cumul,
+                q = q,
+                bootstrap_weighted = bootstrap_weighted,
+                R = R,
+                estimates=estimates,
+            )
+            break
+        except:
+            if i == len(scaling_ranges) - 1:
+                raise ValueError("None of the scaling ranges worked")
+            continue    
 
     return mf_data
 
@@ -1566,7 +1572,8 @@ def get_metrics(data:pd.DataFrame,
                 window:int,
                 distance:int,
                 tail:int,
-                window_metrics:int) -> pd.DataFrame:
+                window_metrics:int,
+                with_wl:bool = True) -> pd.DataFrame:
     """
     Function for the calculation of metrics for the modelling
 
@@ -1588,6 +1595,8 @@ def get_metrics(data:pd.DataFrame,
         Tail of critical transitions that will separate it from noise outliers
     window_metrics : int
         The window size for metrics
+    with_wl : bool = True
+        Whether to use wavelet analysis
 
     Returns:
     ----------
@@ -1620,9 +1629,10 @@ def get_metrics(data:pd.DataFrame,
             kurt = []
             PSD = []
             acf_1 = []
-            wl_c1 = []
-            wl_c2 = []
-            wl_c3 = []
+            if with_wl == True:
+                wl_c1 = []
+                wl_c2 = []
+                wl_c3 = []
 
             for j in range(len(ds_ticker_ind)):
                 # Skipping first {window_metrics iterations which number is smaller than the needed window size
@@ -1635,9 +1645,10 @@ def get_metrics(data:pd.DataFrame,
                     kurt.append(None)
                     PSD.append(None)
                     acf_1.append(None)
-                    wl_c1.append(None)
-                    wl_c2.append(None)
-                    wl_c3.append(None)
+                    if with_wl == True:
+                        wl_c1.append(None)
+                        wl_c2.append(None)
+                        wl_c3.append(None)
                 # Calculating metrics for the rest of the time series
                 else:
                     data_before_j = ds_ticker_ind.iloc[j - window_metrics + 1 : j + 1]
@@ -1666,22 +1677,16 @@ def get_metrics(data:pd.DataFrame,
                     
                     # Set of the available scaling ranges heavily depends on the size of the dataset
                     # So, we are checking better scaling range and then downsizing if it raises error
-                    try:
+                    if with_wl == True:
                         dwt, lwt = mf_analysis_full(data_before_j['Volume'].values,
-                            scaling_ranges = [(2, 5)],
+                            scaling_ranges = [(2, 5), (2, 4), (2, 3)],
                             q = build_q_log(1, 10, 20),
                             n_cumul = 3
                         )
-                    except:
-                        dwt, lwt = mf_analysis_full(data_before_j['Volume'].values,
-                            scaling_ranges = [(2, 4)],
-                            q = build_q_log(1, 10, 20),
-                            n_cumul = 3
-                        )
-                    _, lwt_cumul, _, _ = lwt
-                    wl_c1.append(lwt_cumul.log_cumulants[0][0][0])
-                    wl_c2.append(lwt_cumul.log_cumulants[1][0][0])
-                    wl_c3.append(lwt_cumul.log_cumulants[2][0][0])
+                        _, lwt_cumul, _, _ = lwt
+                        wl_c1.append(lwt_cumul.log_cumulants[0][0][0])
+                        wl_c2.append(lwt_cumul.log_cumulants[1][0][0])
+                        wl_c3.append(lwt_cumul.log_cumulants[2][0][0])
 
             ds_ticker_ind['Hurst'] = Hurst
             ds_ticker_ind['CorrDim'] = corr_dim
@@ -1691,10 +1696,11 @@ def get_metrics(data:pd.DataFrame,
             ds_ticker_ind['Kurtosis'] = kurt
             ds_ticker_ind['PSD'] = PSD
             ds_ticker_ind['ACF_1'] = acf_1
-            ds_ticker_ind['WL_C1'] = wl_c1
-            ds_ticker_ind['WL_C2'] = wl_c2
-            ds_ticker_ind['WL_C3'] = wl_c3
-            # ds_ticker_ind.dropna(inplace = True)
+            if with_wl == True:
+                ds_ticker_ind['WL_C1'] = wl_c1
+                ds_ticker_ind['WL_C2'] = wl_c2
+                ds_ticker_ind['WL_C3'] = wl_c3
+            ds_ticker_ind.dropna(inplace = True)
 
             ds = pd.concat([ds, ds_ticker_ind])
 
