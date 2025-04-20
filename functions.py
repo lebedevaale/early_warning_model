@@ -2276,3 +2276,21 @@ def optuna_and_boosting(data:pd.DataFrame,
     shap_summaries.to_parquet(f'{directory}/_Ensemble/shaps.parquet', index = False)
 
     return stats
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+
+def shap_pivot(shaps:pd.DataFrame,
+               model:str = '_Ensemble') -> pd.DataFrame:
+    """
+    Function to pivot SHAP values for models and ensemble
+    """
+    # Create dictionary with version names
+    versions = {'_8_dyn': 'Dynamics', '_8_Variance': 'Variance'}
+    
+    # Create pivot with original and modofied features
+    shaps_features = shaps[~shaps['Feature'].str.contains('|'.join(versions.keys()), regex = True)][['Feature', model]].groupby('Feature').mean().rename(columns = {model: 'Original'})
+    for version in versions.keys():
+        shap_version = shaps[shaps['Feature'].str.contains(version)].groupby('Feature')[[model]].mean().rename(columns = {model: versions[version]})
+        shap_version.index = [i.replace(version, '') for i in shap_version.index]
+        shaps_features = shaps_features.join(shap_version, how = 'left')
+    return round(shaps_features, 4)
