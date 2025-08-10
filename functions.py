@@ -1409,7 +1409,10 @@ def find_rise(data:pd.DataFrame,
     """
     # Get column for the analysis
     data_final = pd.DataFrame(data.index).set_index(0)
-    data_final = data[column].to_frame().dropna()
+    if 'Date' in data.columns:
+        data_final = data[[column, 'Date']].dropna()
+    else:
+        data_final = data[[column]].dropna()
 
     # Calculate MA and MV
     data_final[f'MA{window}'] = data_final[column].rolling(int(window)).mean()
@@ -1678,15 +1681,20 @@ def get_metrics(data:pd.DataFrame,
                     # Set of the available scaling ranges heavily depends on the size of the dataset
                     # So, we are checking better scaling range and then downsizing if it raises error
                     if with_wl == True:
-                        dwt, lwt = mf_analysis_full(data_before_j['Volume'].values,
-                            scaling_ranges = [(2, 5), (2, 4), (2, 3)],
-                            q = build_q_log(1, 10, 20),
-                            n_cumul = 3
-                        )
-                        _, lwt_cumul, _, _ = lwt
-                        wl_c1.append(lwt_cumul.log_cumulants[0][0][0])
-                        wl_c2.append(lwt_cumul.log_cumulants[1][0][0])
-                        wl_c3.append(lwt_cumul.log_cumulants[2][0][0])
+                        try:
+                            dwt, lwt = mf_analysis_full(data_before_j['Volume'].values,
+                                scaling_ranges = [(2, 5), (2, 4), (2, 3)],
+                                q = build_q_log(1, 10, 20),
+                                n_cumul = 3
+                            )
+                            _, lwt_cumul, _, _ = lwt
+                            wl_c1.append(lwt_cumul.log_cumulants[0][0][0])
+                            wl_c2.append(lwt_cumul.log_cumulants[1][0][0])
+                            wl_c3.append(lwt_cumul.log_cumulants[2][0][0])
+                        except:
+                            wl_c1.append(0)
+                            wl_c2.append(0)
+                            wl_c3.append(0)
 
             ds_ticker_ind['Hurst'] = Hurst
             ds_ticker_ind['CorrDim'] = corr_dim
