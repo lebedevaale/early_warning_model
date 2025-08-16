@@ -122,25 +122,40 @@ def heatmap(data:pd.DataFrame):
     """
 
     # Creating grid of subplots
-    fig = make_subplots(rows = 1, cols = 2, subplot_titles = ["Pearson Correlation", "Spearman Correlation"])
+    fig = make_subplots(
+        rows = 1,
+        cols = 3,
+        subplot_titles = [
+            "Pearson Correlation",
+            "Spearman Correlation",
+            "Covariance"
+        ]
+    )
 
     # Add trace for each correlation matrix
     z1 = data.corr(method = 'pearson')
     z2 = data.corr(method = 'spearman')
-    z = [z1, z2]
+    z3 = data.cov()
+    z = [z1, z2, z3]
     for i in range(len(z)):
-        fig.add_trace(go.Heatmap(z = z[i][::-1],
-                                 x = data.columns,
-                                 y = data.columns[::-1],
-                                 text = z[i][::-1].round(2),
-                                 texttemplate = "%{text}",
-                                 zmin = -1, zmax = 1), 
-                                 row = 1, col = i + 1)
+        fig.add_trace(
+            go.Heatmap(
+                z = z[i][::-1],
+                x = data.columns,
+                y = data.columns[::-1],
+                text = z[i][::-1].round(2),
+                texttemplate = "%{text}",
+                zmin = -1,
+                zmax = 1
+            ), 
+            row = 1,
+            col = i + 1
+        )
 
     # Update layout
     fig.update_layout(
         showlegend = False,
-        font = dict(size = 14),
+        font = dict(size = 11),
         height = 600,
         width = 1600
     )
