@@ -43,11 +43,13 @@ np.random.seed(0)
 
 #---------------------------------------------------------------------------------------
 
-def variables_dynamics(data:pd.DataFrame,
-                       groupby:str,
-                       mean_only:bool = False,
-                       save:bool = False,
-                       file_name:str = None) -> None:
+def variables_dynamics(
+    data:pd.DataFrame,      
+    groupby:str,
+    mean_only:bool = False,
+    save:bool = False,
+    file_name:str = None
+) -> None:
     """
     Function for the plotting of the dynamics for the variables
 
@@ -166,8 +168,10 @@ def heatmap(data:pd.DataFrame):
 
 #---------------------------------------------------------------------------------------
 
-def roc_metric(Y:pd.DataFrame,
-               Y_pred:pd.DataFrame) -> tuple:
+def roc_metric(
+    Y:pd.DataFrame,
+    Y_pred:pd.DataFrame
+) -> tuple:
     """
     Function for the calculation of AUC metric
 
@@ -194,9 +198,11 @@ def roc_metric(Y:pd.DataFrame,
 
 #---------------------------------------------------------------------------------------
 
-def remove_most_insignificant(X, 
-                              X_test, 
-                              results) -> tuple:
+def remove_most_insignificant(
+    X, 
+    X_test, 
+    results
+) -> tuple:
     """
     Function for the removal of the most insignificant variables from the model
 
@@ -225,11 +231,13 @@ def remove_most_insignificant(X,
 
 #---------------------------------------------------------------------------------------
 
-def get_preds_and_stats(type:str,
-                        dataset:dict,
-                        model,
-                        results,
-                        proba:bool = True):
+def get_preds_and_stats(
+    type:str,
+    dataset:dict,
+    model,
+    results,
+    proba:bool = True
+):
     """
     Function for the calculation of predictions and statistics for the model
 
@@ -316,18 +324,20 @@ def get_preds_and_stats(type:str,
 
 #---------------------------------------------------------------------------------------
 
-def model_optimization(Y_train,
-                       Y_val,
-                       Y_test,
-                       X_train,
-                       X_val,
-                       X_test,
-                       type:str = 'Probit',
-                       state:int = 0,
-                       p_value_bord:float = 0.05, 
-                       silent:bool = False,
-                       insignificant_feature:bool = True,
-                       target_metric:str = 'AUC') -> tuple:
+def model_optimization(
+    Y_train,
+    Y_val,
+    Y_test,
+    X_train,
+    X_val,
+    X_test,
+    type:str = 'Probit',
+    state:int = 0,
+    p_value_bord:float = 0.05, 
+    silent:bool = False,
+    insignificant_feature:bool = True,
+    target_metric:str = 'AUC'
+) -> tuple:
     """
     Function for the optimization of OLS
 
@@ -485,10 +495,12 @@ def model_optimization(Y_train,
     return results, aucs, kss, f1s, prs, recs
 
 #---------------------------------------------------------------------------------------
-def split_train_val_test(X,
-                         Y, 
-                         state:int = 0,
-                         sample_sizes:list = [0.6, 0.2, 0.2]):
+def split_train_val_test(
+    X,
+    Y, 
+    state:int = 0,
+    sample_sizes:list = [0.6, 0.2, 0.2]
+):
     """
     Function for splitting the dataset into train, validation and test sets
 
@@ -523,20 +535,22 @@ def split_train_val_test(X,
         raise ValueError('Sample sizes must sum to 1')
     
     # Split the dataset
-    X_train, X_test, Y_train, Y_test = modsel.train_test_split(X, Y, test_size = sample_sizes[2], random_state = state)
-    X_train, X_val, Y_train, Y_val = modsel.train_test_split(X_train, Y_train, test_size = sample_sizes[1] / (1 - sample_sizes[2]), random_state = state)
+    X_train, X_test, Y_train, Y_test = modsel.train_test_split(X, Y, test_size = sample_sizes[2], random_state = state, shuffle = False)
+    X_train, X_val, Y_train, Y_val = modsel.train_test_split(X_train, Y_train, test_size = sample_sizes[1] / (1 - sample_sizes[2]), random_state = state, shuffle = False)
 
     return X_train, X_val, X_test, Y_train, Y_val, Y_test
 #---------------------------------------------------------------------------------------
 
-def model(data,
-          target:str,
-          horizons:list,
-          shares:list,
-          states:list,
-          model:str = 'Probit',
-          separate:bool = False,
-          target_metric:str = 'AUC') -> pd.DataFrame:
+def model(
+    data,
+    target:str,
+    horizons:list,
+    shares:list,
+    states:list,
+    model:str = 'Probit',
+    separate:bool = False,
+    target_metric:str = 'AUC'
+) -> pd.DataFrame:
     """
     Function for the Monte Carlo simulation of the samples and modelling
 
@@ -725,11 +739,13 @@ def model(data,
 
 #---------------------------------------------------------------------------------------
 
-def save_results(res:pd.DataFrame,
-                 cols:list,
-                 model:str = 'Probit',
-                 sep:bool = False,
-                 path:str = 'Params') -> pd.DataFrame:
+def save_results(
+    res:pd.DataFrame,
+    cols:list,
+    model:str = 'Probit',
+    sep:bool = False,
+    path:str = 'Params'
+) -> pd.DataFrame:
     """
     Function for the saving of the simulation results
     
@@ -798,11 +814,13 @@ def save_results(res:pd.DataFrame,
 
 #---------------------------------------------------------------------------------------
     
-def generate_random_series(length:int, 
-                           number:int, 
-                           mean:float = None, 
-                           sigma:float = None, 
-                           type:str = 'normal') -> pd.DataFrame:
+def generate_random_series(
+    length:int, 
+    number:int, 
+    mean:float = None, 
+    sigma:float = None, 
+    type:str = 'normal'
+) -> pd.DataFrame:
     """
     Function for the generation of random series
     
@@ -848,12 +866,14 @@ def generate_random_series(length:int,
 
 #---------------------------------------------------------------------------------------
 
-def graph_generation(graph_type:str,
-                     number_of_nodes:int, 
-                     BA_connect:int = None, 
-                     ER_prob:float = None,
-                     CL_average:int = None,
-                     silent:bool = True) -> nx.Graph:
+def graph_generation(
+    graph_type:str,
+    number_of_nodes:int, 
+    BA_connect:int = None, 
+    ER_prob:float = None,
+    CL_average:int = None,
+    silent:bool = True
+) -> nx.Graph:
     """
     Function that generates a graph based on the specified graph type.
 
@@ -906,9 +926,11 @@ def graph_generation(graph_type:str,
 
 #---------------------------------------------------------------------------------------
 
-def grain_generator(number_of_nodes:int, 
-                    number_of_days:int, 
-                    dist:str = 'uni') -> list:
+def grain_generator(
+    number_of_nodes:int, 
+    number_of_days:int, 
+    dist:str = 'uni'
+) -> list:
     """
     Generate grains to be put into the sand pile based on the specified distribution for a given number of nodes and days.
 
@@ -958,14 +980,16 @@ def grain_generator(number_of_nodes:int,
 
 #---------------------------------------------------------------------------------------
 
-def spread_model(G:nx.Graph, 
-                 ones:list, 
-                 falls_d:int, 
-                 d:int, 
-                 node:list, 
-                 crit:int, 
-                 type:str = 'BTW',
-                 facilit_list:list = None) -> tuple:
+def spread_model(
+    G:nx.Graph, 
+    ones:list, 
+    falls_d:int, 
+    d:int, 
+    node:list, 
+    crit:int, 
+    type:str = 'BTW',
+    facilit_list:list = None
+) -> tuple:
     """
     Function for the implementation of different spread models on the graph.
     Code for the facilitated models should be optimised further, but I gave up on it.
@@ -1086,16 +1110,18 @@ def spread_model(G:nx.Graph,
 
 #---------------------------------------------------------------------------------------
 
-def spread(model:str,
-           G:nx.Graph,
-           number_of_days:int,
-           new_grains:list,
-           facilitated:bool = False,
-           ad_dissipation:bool = False,
-           neutral_state:bool = False,
-           new_grains_plus:list = None,
-           new_grains_minus: list = None,
-           silent:bool = True) -> list:
+def spread(
+    model:str,
+    G:nx.Graph,
+    number_of_days:int,
+    new_grains:list,
+    facilitated:bool = False,
+    ad_dissipation:bool = False,
+    neutral_state:bool = False,
+    new_grains_plus:list = None,
+    new_grains_minus: list = None,
+    silent:bool = True
+) -> list:
     """
     Function for modelling of sand grain spread with Bak-Tang-Wiesenfeld and Manna on random graphs.
 
@@ -1195,9 +1221,11 @@ def spread(model:str,
 
 #---------------------------------------------------------------------------------------
 
-def critical_transition(data:pd.DataFrame,
-                        crit:int,
-                        window:int) -> pd.DataFrame:
+def critical_transition(
+    data:pd.DataFrame,
+    crit:int,
+    window:int
+) -> pd.DataFrame:
     """
     Function for the calculation of the critical transition.
 
@@ -1227,9 +1255,11 @@ def critical_transition(data:pd.DataFrame,
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
-def emd(signal, 
-        t, 
-        plot:bool = False):
+def emd(
+    signal, 
+    t, 
+    plot:bool = False
+):
     """
     Function for the decomposition of time series to the several components until the last one is monotonous
     Source: https://towardsdatascience.com/improve-your-time-series-analysis-with-stochastic-and-deterministic-components-decomposition-464e623f8270
@@ -1332,12 +1362,14 @@ def phase_mi(phases):
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
-def divide_signal(signal, 
-                  t, 
-                  imfs, 
-                  mis, 
-                  cutoff:float = 0.05, 
-                  plot = False):
+def divide_signal(
+    signal, 
+    t, 
+    imfs, 
+    mis, 
+    cutoff:float = 0.05, 
+    plot = False
+):
     """
     Function for the final separation to the stohastic and determenistic components
     Source: https://towardsdatascience.com/improve-your-time-series-analysis-with-stochastic-and-deterministic-components-decomposition-464e623f8270
@@ -1396,11 +1428,13 @@ def divide_signal(signal,
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
-def find_rise(data:pd.DataFrame,
-              column:str,
-              ma:float,
-              mv:float,
-              window:int) -> pd.DataFrame:
+def find_rise(
+    data:pd.DataFrame,
+    column:str,
+    ma:float,
+    mv:float,
+    window:int
+) -> pd.DataFrame:
     """
     Function for the calculation of critical transitions in the time series
 
@@ -1443,12 +1477,14 @@ def find_rise(data:pd.DataFrame,
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
-def find_transitions(data_final:pd.DataFrame,
-                     ma:float,
-                     mv:float,
-                     window:int,
-                     distance:int,
-                     tail:int):
+def find_transitions(
+    data_final:pd.DataFrame,
+    ma:float,
+    mv:float,
+    window:int,
+    distance:int,
+    tail:int
+):
     """
     Function for the calculation of critical transitions in the time series
 
@@ -1489,15 +1525,18 @@ def find_transitions(data_final:pd.DataFrame,
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
-def mf_analysis_full(signal,
-                     scaling_ranges,
-                     normalization=1,
-                     weighted=None,
-                     wt_name='db3',
-                     q=None,
-                     n_cumul=3,
-                     bootstrap_weighted=None,
-                     estimates='scm', R=1):
+def mf_analysis_full(
+    signal,
+    scaling_ranges,
+    normalization=1,
+    weighted=None,
+    wt_name='db3',
+    q=None,
+    n_cumul=3,
+    bootstrap_weighted=None,
+    estimates='scm',
+    R=1
+):
     """Perform multifractal analysis on a signal.
 
     .. note:: This function combines wavelet analysis and multifractal analysis
@@ -1583,15 +1622,16 @@ def mf_analysis_full(signal,
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
-def get_metrics(data:pd.DataFrame,
-                active_tickers:list,
-                ma:float,
-                mv:float,
-                window:int,
-                distance:int,
-                tail:int,
-                window_metrics:int,
-                with_wl:bool = True) -> pd.DataFrame:
+def get_metrics(
+    data:pd.DataFrame,
+    active_tickers:list,
+    ma:float,
+    mv:float,
+    window:int,
+    distance:int,
+    tail:int,
+    window_metrics:int,
+    with_wl:bool = True) -> pd.DataFrame:
     """
     Function for the calculation of metrics for the modelling
 
@@ -1733,9 +1773,11 @@ def get_metrics(data:pd.DataFrame,
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
-def generate_features(data:pd.DataFrame,
-                      cols:list,
-                      lag_model:list) -> pd.DataFrame:
+def generate_features(
+    data:pd.DataFrame,
+    cols:list,
+    lag_model:list
+) -> pd.DataFrame:
     """
     Function for the generation of features for the modelling
 
@@ -1778,13 +1820,14 @@ def generate_features(data:pd.DataFrame,
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
-def OLS_optimization(Y_val, 
-                     X_val, 
-                     Y_test, 
-                     X_test,
-                     p_value_bord:float = 0.05, 
-                     silent_results:bool = False):
-    
+def OLS_optimization(
+    Y_val, 
+    X_val, 
+    Y_test, 
+    X_test,
+    p_value_bord:float = 0.05, 
+    silent_results:bool = False
+):
     """
     Function for the optimization of OLS
 
@@ -1828,14 +1871,15 @@ def OLS_optimization(Y_val,
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
-def optuna_and_boosting(data:pd.DataFrame,
-                        horizons:list[int], 
-                        random_state:int,
-                        n_trials:int = 5,
-                        target_share_of_1:float = None,
-                        directory:str = '',
-                        shaps:bool = True):
-    
+def optuna_and_boosting(
+    data:pd.DataFrame,
+    horizons:list[int], 
+    random_state:int,
+    n_trials:int = 5,
+    target_share_of_1:float = None,
+    directory:str = '',
+    shaps:bool = True
+):
     """
     Main function for the estimation of the boosting models
 
@@ -2302,8 +2346,10 @@ def optuna_and_boosting(data:pd.DataFrame,
 
 #---------------------------------------------------------------------------------------------------------------------------------------
 
-def shap_pivot(shaps:pd.DataFrame,
-               model:str = '_Ensemble') -> pd.DataFrame:
+def shap_pivot(
+    shaps:pd.DataFrame,
+    model:str = '_Ensemble'
+) -> pd.DataFrame:
     """
     Function to pivot SHAP values for models and ensemble
     """
